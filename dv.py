@@ -30,7 +30,7 @@ class DistanceVectorRouting:
             with open(self.topology_file, 'r') as file:
                 lines = file.readlines()
                 num_servers = int(lines[0].strip())
-                counter = 2 # For iteration to find and store link cost info
+                counter = 2  # For iteration to find and store link cost info
                 # Parse server details
                 for i in range(2, 2 + num_servers):
                     server_id, server_ip, server_port = lines[i].strip().split()
@@ -75,7 +75,7 @@ class DistanceVectorRouting:
             try:
                 client_socket, client_address = self.server_socket.accept()
                 print(f"New connection from {client_address}")
-                threading.Thread(target=self.handle_client, args=(client_socket,client_address), daemon=True).start()
+                threading.Thread(target=self.handle_client, args=(client_socket, client_address), daemon=True).start()
             except socket.error:
                 if self.stop_event.is_set():
                     break
@@ -113,6 +113,9 @@ class DistanceVectorRouting:
         finally:
             client_socket.close()
 
+    def handle_server(self):  # May or may not need
+        pass
+
     def process_command(self, command):
         parts = command.split()
         if parts[0] == 'update' and len(parts) == 4:
@@ -121,8 +124,6 @@ class DistanceVectorRouting:
             self.shutdown()
         else:
             print("Invalid command format")
-
-
 
     def start_server(self):
         self.setup_server_socket()
@@ -143,7 +144,8 @@ class DistanceVectorRouting:
         while not self.stop_event.is_set():
             command = input("Enter command: ")
             self.process_command(command)
-    def update(self,parts):
+
+    def update(self, parts):
         try:
             server_id1 = int(parts[1])
             server_id2 = int(parts[2])
@@ -169,6 +171,7 @@ class DistanceVectorRouting:
                 print(f"No link found between Server {server_id1} and Server {server_id2}")
         except ValueError:
             print("Invalid input. Please use the format: update <server-ID1> <server-ID2> <Link Cost>")
+
     def shutdown(self):
         print("Shutting down server...")
         self.stop_event.set()
@@ -177,6 +180,36 @@ class DistanceVectorRouting:
         self.server_socket.close()
         print("Server shut down successfully.")
         sys.exit(0)
+
+    def send_update(self):
+        pass
+
+    def periodic_update(self):
+        pass
+
+    def handle_incoming_messages(self):
+        pass
+
+    def initialise_routing_table(self):
+        pass
+
+    def apply_bellman_ford(self):
+        pass
+
+    def handle_display(self):
+        pass
+
+    def handle_packets(self):
+        pass
+
+    def handle_disable(self):
+        pass
+
+    def handle_step(self):
+        pass
+
+    def handle_crash(self):  # Can be implemented using shutdown()
+        pass
 
 
 if __name__ == "__main__":
