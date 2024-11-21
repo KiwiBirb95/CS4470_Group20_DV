@@ -1,7 +1,7 @@
 import socket
 import sys
 import threading
-
+import struct #Library for message formatting
 
 def get_local_ip():
     try:
@@ -23,8 +23,8 @@ class DistanceVectorRouting:
         self.server_details = {}
         self.connections = {}
         self.stop_event = threading.Event()
-        self.link_costs = {}  # Link costs between servers
-
+        self.link_costs = {}  # Link costs between servers, (host server id, destination server id) : cost
+        self.routing_table = [] # array containing dict entries: ip, port, server_id, cost
     def parse_topology_file(self):
         try:
             with open(self.topology_file, 'r') as file:
@@ -37,11 +37,6 @@ class DistanceVectorRouting:
                     self.server_details[int(server_id)] = (server_ip, int(server_port))
                     counter += 1
 
-                # Initialize link costs between servers
-                for i in range(counter, len(lines)):
-                    source_id, destination_id, cost = lines[i].strip().split()
-                    self.link_costs[(int(source_id), int(destination_id))] = int(cost)
-                print(self.link_costs)
                 # Determine this server's ID based on its IP
                 local_ip = get_local_ip()
                 for server_id, (server_ip, server_port) in self.server_details.items():
@@ -50,7 +45,20 @@ class DistanceVectorRouting:
                         self.ip = server_ip
                         self.port = server_port
                         break
-
+                for i in range(2, 2 + num_servers):
+                    server_id, server_ip, server_port = lines[i].strip().split()
+                    if int(server_id) != int(self.server_id):
+                        self.routing_table.append({"server_ip" : server_ip, 'server_port' : int(server_port), "server_id": int(server_id)} )
+                    # Initialize link costs between servers
+                for i in range(counter, len(lines)):
+                    source_id, destination_id, cost = lines[i].strip().split()
+                    self.link_costs[(int(source_id), int(destination_id))] = int(cost)
+                    for index, d in enumerate(self.routing_table):
+                        if int(d.get('server_id')) == int(destination_id):
+                            print("123")
+                            self.routing_table[index]['cost'] = float(cost)
+                #print(self.link_costs)
+                #print(self.routing_table)
                 if self.server_id is None:
                     raise ValueError(f"Local IP {local_ip} does not match any server in the topology file.")
 
@@ -181,8 +189,15 @@ class DistanceVectorRouting:
         print("Server shut down successfully.")
         sys.exit(0)
 
-    def send_update(self):
+    def send_update(self, num_entries, routing_table):
         pass
+        message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
+        for entry in routing_table:
+            server_ip_n = entry['server_ip']
+            server_port_n = entry['server_port']
+            server_id_n = entry['server_id']
+            cost_n = entry['cost']
+            message += struct.pack('<4s H H H', socket.inet_aton(server_ip_n), server_port_n, server_id_n, cost_n)
 
     def periodic_update(self):
         pass
