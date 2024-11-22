@@ -1,7 +1,7 @@
 import socket
+import struct  # Library for message formatting
 import sys
 import threading
-import struct  # Library for message formatting
 import time
 
 
@@ -17,30 +17,38 @@ def get_local_ip():
 
 
 class DistanceVectorRouting:
-    def __init__(self, topology_file):
+    def __init__(self, topology_file, update_interval):
         self.topology_file = topology_file
+        self.update_interval = update_interval
         self.server_id = None
         self.ip = None
         self.port = None
         self.server_details = {}
         self.connections = {}
         self.stop_event = threading.Event()
-        self.link_costs = {}  # Link costs between servers, (host server id, destination server id) : cost
-        self.routing_table = []  # array containing dict entries: ip, port, server_id, cost
+        self.link_costs = {}
+        self.routing_table = {}
+        self.routing_table_lock = threading.Lock()
+        self.neighbors = {}
+        self.server_socket = None
+        self.missed_updates = {neighbor_id: 0 for neighbor_id in self.neighbors.keys()}
 
     def parse_topology_file(self):
         try:
             with open(self.topology_file, 'r') as file:
                 lines = file.readlines()
+                if len(lines) < 2:
+                    raise ValueError("Invalid topology file format. Must contain at least two lines.")
+
+                # First two lines specify the number of servers and neighbors
                 num_servers = int(lines[0].strip())
-                counter = 2  # For iteration to find and store link cost info
+                num_neighbors = int(lines[1].strip())
+
                 # Parse server details
+                self.server_details = {}
                 for i in range(2, 2 + num_servers):
                     server_id, server_ip, server_port = lines[i].strip().split()
                     self.server_details[int(server_id)] = (server_ip, int(server_port))
-                    self.routing_table.append(
-                        {'server_ip': server_ip, 'server_port': int(server_port), 'server_id': int(server_id)})
-                    counter += 1
 
                 # Determine this server's ID based on its IP
                 local_ip = get_local_ip()
@@ -50,24 +58,39 @@ class DistanceVectorRouting:
                         self.ip = server_ip
                         self.port = server_port
                         break
-                    # Initialize link costs between servers
-                for i in range(counter, len(lines)):
-                    source_id, destination_id, cost = lines[i].strip().split()
-                    self.link_costs[(int(source_id), int(destination_id))] = int(cost)
-                    for index, d in enumerate(self.routing_table):
-                        if int(d.get('server_id')) == int(self.server_id):
-                            self.routing_table[index]['cost'] = float(0)
-                        elif int(d.get('server_id')) == int(destination_id):
-                            self.routing_table[index]['cost'] = float(cost)
-                # print(self.link_costs)
-                # print(self.routing_table)
+
                 if self.server_id is None:
                     raise ValueError(f"Local IP {local_ip} does not match any server in the topology file.")
 
-                print(f"Parsed server details: {self.server_details}")
-                print(f"Local server ID: {self.server_id}, IP: {self.ip}, Port: {self.port}")
+                # Parse neighbor information
+                self.neighbors = {}
+                for i in range(2 + num_servers, len(lines)):
+                    server1, server2, cost = map(int, lines[i].strip().split())
+                    if server1 == self.server_id:
+                        self.neighbors[server2] = cost
+                    elif server2 == self.server_id:
+                        self.neighbors[server1] = cost
+
+                # Initialize routing table
+                self.routing_table = {}
+                for server_id in self.server_details.keys():
+                    if server_id == self.server_id:
+                        self.routing_table[server_id] = (server_id, 0)  # Cost to self is 0
+                    elif server_id in self.neighbors:
+                        self.routing_table[server_id] = (server_id, self.neighbors[server_id])  # Direct neighbors
+                    else:
+                        self.routing_table[server_id] = (None, float('inf'))  # Unreachable initially
+
+                # Initialize missed updates counter for neighbors
+                self.missed_updates = {neighbor_id: 0 for neighbor_id in self.neighbors.keys()}
+
+                print("Topology file parsed successfully.")
+                print(f"Server ID: {self.server_id}")
+                print(f"Neighbors: {self.neighbors}")
+                print(f"Routing Table: {self.routing_table}")
+
         except Exception as e:
-            print(f"Error parsing topology file: {e}")
+            print(f"Error reading topology file: {e}")
             sys.exit(1)
 
     def setup_server_socket(self):
@@ -102,62 +125,137 @@ class DistanceVectorRouting:
                 except Exception as e:
                     print(f"Error connecting to neighbor {neighbor_id}: {e}")
 
+    def parse_message(self, message):
+        try:
+            # Unpack the header (adjust format string based on your protocol)
+            num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', message[:8])
+            sender_ip = socket.inet_ntoa(sender_ip)
+
+            offset = 8
+            routing_table = {}
+            for _ in range(num_entries):
+                server_ip, server_port, server_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
+                server_ip = socket.inet_ntoa(server_ip)
+                routing_table[server_id] = (server_ip, cost)
+                offset += 12
+
+            return {
+                'server_id': sender_port,  # Assuming sender_port corresponds to the server ID
+                'routing_table': routing_table
+            }
+        except Exception as e:
+            print(f"Error parsing message: {e}")
+            raise
+
+    def process_incoming_update(self, message, sender_id):
+        try:
+            # Parse the incoming message
+            update_data = self.parse_message(message)
+
+            # Apply Bellman-Ford logic to update the routing table
+            self.apply_bellman_ford(update_data['routing_table'], sender_id)
+
+            # Reset missed updates counter for this neighbor
+            with self.routing_table_lock:
+                if sender_id in self.missed_updates:
+                    self.missed_updates[sender_id] = 0
+            print(f"Received routing update from server {sender_id}")
+        except Exception as e:
+            print(f"Error processing incoming update: {e}")
+
     def handle_client(self, client_socket, client_address):
         try:
             while not self.stop_event.is_set():
-                try:
-                    message = client_socket.recv(1024).decode()
-                    if not message:
-                        break
-                    for server_id, temp_socket in self.connections.items():
-                        if client_address[0] in str(temp_socket):
-                            print(f"RECEIVED A MESSAGE FROM SERVER {server_id}")
-                    parts = message.split()
-                    if parts[0] == "update":
-                        for ids, cost in self.link_costs.items():
-                            if int(parts[1]) == ids[0] and int(parts[2]) == ids[1]:
-                                self.link_costs[(ids[0], ids[1])] = float(parts[3])
-                except UnicodeDecodeError:
-                    offset = 8
-                    try:
-                        message = client_socket.recv(1024)
-                        num_entries, port, ip = struct.unpack('<H H 4s', message[:8])
-                        ip = socket.inet_ntoa(ip)  # unpacks ip
-                        for _ in range(num_entries):
-                            server_ip, server_port, server_id, cost = struct.unpack('<4s H H f',
-                                                                                    message[offset: offset + 12])
-                            server_ip = socket.inet_ntoa(server_ip)
-                            offset += 12  # 4 byte ip, 2 byte port, 2 byte id, 4 byte cost
-                            #print(server_ip, server_port, server_id, cost)
-                    except Exception as e:
-                        print(e)
-                # print(self.link_costs)
+                # Receive raw binary data
+                message = client_socket.recv(1024)
+                if not message:
+                    break
 
+                # Parse the binary message and process it
+                parsed_data = self.parse_message(message)
+                sender_id = parsed_data['server_id']
+
+                # Process the incoming update
+                self.process_incoming_update(message, sender_id)
         except Exception as e:
-            print(f"Error handling client: {e}")
+            print(f"Error handling client {client_address}: {e}")
         finally:
             client_socket.close()
 
-    def handle_server(self):  # May or may not need
-        pass
+    # def handle_client(self, client_socket, client_address):
+    #     try:
+    #         while not self.stop_event.is_set():
+    #             try:
+    #                 message = client_socket.recv(1024).decode()
+    #                 if not message:
+    #                     break
+    #                 for server_id, temp_socket in self.connections.items():
+    #                     if client_address[0] in str(temp_socket):
+    #                         print(f"RECEIVED A MESSAGE FROM SERVER {server_id}")
+    #                 parts = message.split()
+    #                 if parts[0] == "update":
+    #                     for ids, cost in self.link_costs.items():
+    #                         if int(parts[1]) == ids[0] and int(parts[2]) == ids[1]:
+    #                             self.link_costs[(ids[0], ids[1])] = float(parts[3])
+    #             except UnicodeDecodeError:
+    #                 offset = 8
+    #                 try:
+    #                     message = client_socket.recv(1024)
+    #                     num_entries, port, ip = struct.unpack('<H H 4s', message[:8])
+    #                     ip = socket.inet_ntoa(ip)  # unpacks ip
+    #                     for _ in range(num_entries):
+    #                         server_ip, server_port, server_id, cost = struct.unpack('<4s H H f',
+    #                                                                                 message[offset: offset + 12])
+    #                         server_ip = socket.inet_ntoa(server_ip)
+    #                         offset += 12  # 4 byte ip, 2 byte port, 2 byte id, 4 byte cost
+    #                         # print(server_ip, server_port, server_id, cost)
+    #                 except Exception as e:
+    #                     print(e)
+    #             # print(self.link_costs)
+    #
+    #     except Exception as e:
+    #         print(f"Error handling client: {e}")
+    #     finally:
+    #         client_socket.close()
 
     def process_command(self, command):
         parts = command.split()
-        if parts[0] == 'update' and len(parts) == 4:
-            self.update(parts)
-        elif parts[0] == "shutdown":
-            self.shutdown()
-        else:
-            print("Invalid command format")
+        if len(parts) == 0:
+            print("No command entered.")
+            return
+
+        cmd = parts[0].lower()
+        try:
+            if cmd == "update" and len(parts) == 4:
+                self.update(parts)
+            elif cmd == "step":
+                self.send_update(len(self.routing_table))
+                print("Step executed.")
+            elif cmd == "packets":
+                self.handle_packets()
+            elif cmd == "display":
+                self.handle_display()
+            elif cmd == "disable" and len(parts) == 2:
+                server_id = int(parts[1])
+                self.handle_disable(server_id)
+            elif cmd == "crash":
+                self.shutdown()
+            else:
+                print(
+                    f"Unknown command: {command}. Available commands: update, step, packets, display, disable, crash.")
+        except Exception as e:
+            print(f"Error handling command: '{command} : {e}")
 
     def start_server(self):
         self.setup_server_socket()
 
         threading.Thread(target=self.accept_connections, daemon=True).start()
-        self.connect_to_neighbors()
+        threading.Thread(target=self.connect_to_neighbors, daemon=True).start()
+        threading.Thread(target=self.periodic_update, args=(self.update_interval,), daemon=True).start()
+        threading.Thread(target=self.monitor_neighbors, args=(self.update_interval,), daemon=True).start()
 
-        # Command input loop
-        threading.Thread(target=self.command_input_loop, daemon=True).start()
+        # Command input loop runs in the main thread to prevent immediate exit
+        self.command_input_loop()
 
     def command_input_loop(self):
         while not self.stop_event.is_set():
@@ -166,62 +264,64 @@ class DistanceVectorRouting:
 
     def update(self, parts):
         try:
-            server_id1 = int(parts[1])
-            server_id2 = int(parts[2])
-            new_cost = int(parts[3])
+            server_id1, server_id2, link_cost = int(parts[1]), int(parts[2]), float(parts[3])
 
-            if (server_id1, server_id2) in self.link_costs:
-                # print(self.link_costs)
-                self.link_costs[(server_id1, server_id2)] = new_cost
-                print(f"Link cost updated: Server {server_id1} <-> Server {server_id2} to {new_cost}")
-                # print(self.link_costs)
-
-                for neighbor_id, conn in self.connections.items():
-                    try:
-                        if neighbor_id == server_id2:
-                            update_message = f"update {server_id2} {server_id1} {new_cost}\n"
-                            conn.send(update_message.encode())
-                            print(f"Send update to neighbor {neighbor_id}")
-                    except Exception as e:
-                        print(f"Error sending update to neighbor {neighbor_id}: {e}")
-
+            # Update the link cost if this server is part of the link
+            if self.server_id in (server_id1, server_id2):
+                neighbor_id = server_id2 if self.server_id == server_id1 else server_id1
+                with self.routing_table_lock:
+                    self.link_costs[(self.server_id, neighbor_id)] = link_cost
+                    self.routing_table[neighbor_id] = (neighbor_id if link_cost != float('inf') else None, link_cost)
+                print(f"update {server_id1} {server_id2} {link_cost} SUCCESS")
+                self.send_update(len(self.routing_table))
             else:
-                print(f"No link found between Server {server_id1} and Server {server_id2}")
+                print(f"update {server_id1} {server_id2} ERROR: This server is not part of the link.")
         except ValueError:
-            print("Invalid input. Please use the format: update <server-ID1> <server-ID2> <Link Cost>")
+            print("update ERROR: Invalid input. Use: update <server-ID1> <server-ID2> <Link Cost>")
 
     def shutdown(self):
-        print("Shutting down server...")
-        self.stop_event.set()
-        for neighbor_id, conn in self.connections.items():
-            conn.close()
-        self.server_socket.close()
-        print("Server shut down successfully.")
-        sys.exit(0)
+        print("Simulating server shutdown...")
+        self.stop_event.set()  # Stop all periodic tasks and monitoring
+        for neighbor_id, conn in list(self.connections.items()):
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self.link_costs[(self.server_id, neighbor_id)] = float('inf')
+            self.routing_table[neighbor_id] = (None, float('inf'))
+        self.connections.clear()  # Clear all active connections
+        if self.server_socket:
+            try:
+                self.server_socket.close()
+            except Exception:
+                pass
+        print("Server has shut down.")
+        sys.exit(0)  # Exit the program
 
     def send_update(self, num_entries):
-        message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
-        for entry in self.routing_table:
-            server_ip_n = entry['server_ip']
-            server_port_n = entry['server_port']
-            server_id_n = entry['server_id']
-            cost_n = entry['cost']
-            message += struct.pack('<4s H H f', socket.inet_aton(server_ip_n), int(server_port_n), int(server_id_n),
-                                   float(cost_n))
+        with self.routing_table_lock:
+            message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
+            for dest_id, (next_hop, cost) in self.routing_table.items():
+                if cost != float('inf'):  # Include only reachable destinations
+                    server_ip, server_port = self.server_details[dest_id]
+                    message += struct.pack('<4s H H f', socket.inet_aton(server_ip), server_port, dest_id, cost)
 
         for neighbor_id, conn in self.connections.items():
             try:
                 conn.send(message)
+                print(f"Routing update sent to server {neighbor_id}.")
             except Exception as e:
-                print(f"periodic update failed to send to: server {neighbor_id}")
-                # assign incrementing fail key, value to automatically close connection on specific neighbor
-                print(f"Error: {e}")
+                print(f"Error sending update to server {neighbor_id}: {e}")
 
     def periodic_update(self, interval):
-        while 1:
+        while not self.stop_event.is_set():
+            time.sleep(interval)
             num_entries = len(self.routing_table)
-            self.send_update(num_entries)
-            time.sleep(int(interval))
+            try:
+                self.send_update(num_entries)
+            except RuntimeError as e:
+                print(f"Runtime error during periodic update: {e}")
+                break
 
     def handle_incoming_messages(self):
         while not self.stop_event.is_set():
@@ -242,30 +342,56 @@ class DistanceVectorRouting:
             else:
                 self.routing_table[server_id] = (None, float('inf'))
         print("fInitial routing table: {self.routing_table}")
-    def apply_bellman_ford(self, received_routing_table):
+
+    def apply_bellman_ford(self, received_routing_table, sender_id):
         updated = False
-        sender_id = received_routing_table['server_id']
-        sender_table = received_routing_table['routing_table']
-        for dest_id, (next_hop, cost) in sender_table.items():
-            if dest_id not in self.routing_table:
-                self.routing_table[dest_id] = (sender_id, cost + self.link_costs[(self.server_id, sender_id)])
-                updated = True
-            else:
-                current_cost = self.routing_table[dest_id][1]
-                new_cost = cost + self.link_costs[(self.server_id, sender_id)]
+        for dest_id, (next_hop, cost) in received_routing_table.items():
+            if dest_id == self.server_id:
+                continue  # Skip self
+
+            # Calculate the new cost via the sender
+            new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + cost
+
+            with self.routing_table_lock:
+                current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
+
                 if new_cost < current_cost:
+                    # Update the routing table with better cost
                     self.routing_table[dest_id] = (sender_id, new_cost)
                     updated = True
 
         if updated:
-            print(f"Routing table updated: {self.routing_table}")
+            print(f"Routing table updated by applying Bellman-Ford from server {sender_id}.")
+            self.send_update(len(self.routing_table))
 
     def handle_display(self):
         print("Routing Table:")
-        for dest_id, (next_hop, cost) in sorted(self.routing_table.items()):
-            cost_str = "inf" if cost == float('inf') else str(cost)
-            next_hop_str = "-" if next_hop is None else str(next_hop)
-            print(f"{dest_id}: {next_hop_str} {cost_str}")
+        with self.routing_table_lock:
+            for dest_id in sorted(self.routing_table.keys()):
+                next_hop, cost = self.routing_table[dest_id]
+                cost_str = "inf" if cost == float('inf') else str(cost)
+                next_hop_str = "-" if next_hop is None else str(next_hop)
+                print(f"{dest_id}: {next_hop_str} {cost_str}")
+        print("display SUCCESS")
+
+    def monitor_neighbors(self, interval):
+        time.sleep(interval * 3)  # Grace period: 3 intervals
+        while not self.stop_event.is_set():
+            time.sleep(interval)
+            with self.routing_table_lock:
+                all_neighbors_unreachable = True
+                for neighbor_id in self.missed_updates.keys():
+                    self.missed_updates[neighbor_id] += 1
+                    if self.missed_updates[neighbor_id] > 3:  # Missed 3 intervals
+                        self.link_costs[(self.server_id, neighbor_id)] = float('inf')
+                        self.routing_table[neighbor_id] = (None, float('inf'))
+                        print(f"Link to server {neighbor_id} set to infinity due to missed updates.")
+                    else:
+                        all_neighbors_unreachable = False  # At least one neighbor is reachable
+
+                if all_neighbors_unreachable:
+                    print("All neighbors are unreachable. Shutting down server...")
+                    self.shutdown()
 
     def handle_packets(self):
         pass
@@ -273,21 +399,17 @@ class DistanceVectorRouting:
     def handle_disable(self):
         pass
 
-    def handle_step(self):
-        pass
-
-    def handle_crash(self):  # Can be implemented using shutdown()
-        pass
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5 or sys.argv[1] != "-t" or sys.argv[3] != "-i" or (
-            isinstance(sys.argv[4], int) and sys.argv[4] > 0):
+    if len(sys.argv) != 5 or sys.argv[1] != "-t" or sys.argv[3] != "-i":
         print("Usage: python dv.py -t <topology-file-name> -i <routing-update-interval>")
         sys.exit(1)
 
     topology_file = sys.argv[2]
-    server = DistanceVectorRouting(topology_file)
+    update_interval = int(sys.argv[4])  # Convert interval to an integer
+    print(f"Parsed arguments: Topology file: {topology_file}, Update interval: {update_interval}")  # Debugging line
+
+    # Pass both arguments to the constructor
+    server = DistanceVectorRouting(topology_file, update_interval)
     server.parse_topology_file()
     server.start_server()
-    interval = int(sys.argv[4])
-    server.periodic_update(interval)
