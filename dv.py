@@ -127,22 +127,33 @@ class DistanceVectorRouting:
 
     def parse_message(self, message):
         try:
-            # Unpack the header (adjust format string based on your protocol)
+            # Unpack the header
             num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', message[:8])
             sender_ip = socket.inet_ntoa(sender_ip)
 
+            # Print the header
+            print(f"Number of update fields: {num_entries}")
+            print(f"Server port: {sender_port}")
+            print(f"Server IP: {sender_ip}")
+
+            # Unpack the routing table entries
             offset = 8
-            routing_table = {}
+            routing_table = []
             for _ in range(num_entries):
                 server_ip, server_port, server_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
                 server_ip = socket.inet_ntoa(server_ip)
-                routing_table[server_id] = (server_ip, cost)
+                routing_table.append((server_ip, server_port, server_id, cost))
                 offset += 12
 
-            return {
-                'server_id': sender_port,  # Assuming sender_port corresponds to the server ID
-                'routing_table': routing_table
-            }
+            print("Received update:")
+            print(f"Number of update fields: {num_entries}")
+            print(f"Server port: {sender_port}")
+            print(f"Server IP: {sender_ip}")
+            # Print each entry
+            for entry in routing_table:
+                print(f"Routing Table Entry: {entry}")
+
+            return num_entries, sender_port, sender_ip, routing_table
         except Exception as e:
             print(f"Error parsing message: {e}")
             raise
@@ -159,7 +170,7 @@ class DistanceVectorRouting:
             with self.routing_table_lock:
                 if sender_id in self.missed_updates:
                     self.missed_updates[sender_id] = 0
-            print(f"Received routing update from server {sender_id}")
+            print(f"RECEIVED A MESSAGE FROM SERVER {sender_id}")
         except Exception as e:
             print(f"Error processing incoming update: {e}")
 
@@ -182,42 +193,6 @@ class DistanceVectorRouting:
         finally:
             client_socket.close()
 
-    # def handle_client(self, client_socket, client_address):
-    #     try:
-    #         while not self.stop_event.is_set():
-    #             try:
-    #                 message = client_socket.recv(1024).decode()
-    #                 if not message:
-    #                     break
-    #                 for server_id, temp_socket in self.connections.items():
-    #                     if client_address[0] in str(temp_socket):
-    #                         print(f"RECEIVED A MESSAGE FROM SERVER {server_id}")
-    #                 parts = message.split()
-    #                 if parts[0] == "update":
-    #                     for ids, cost in self.link_costs.items():
-    #                         if int(parts[1]) == ids[0] and int(parts[2]) == ids[1]:
-    #                             self.link_costs[(ids[0], ids[1])] = float(parts[3])
-    #             except UnicodeDecodeError:
-    #                 offset = 8
-    #                 try:
-    #                     message = client_socket.recv(1024)
-    #                     num_entries, port, ip = struct.unpack('<H H 4s', message[:8])
-    #                     ip = socket.inet_ntoa(ip)  # unpacks ip
-    #                     for _ in range(num_entries):
-    #                         server_ip, server_port, server_id, cost = struct.unpack('<4s H H f',
-    #                                                                                 message[offset: offset + 12])
-    #                         server_ip = socket.inet_ntoa(server_ip)
-    #                         offset += 12  # 4 byte ip, 2 byte port, 2 byte id, 4 byte cost
-    #                         # print(server_ip, server_port, server_id, cost)
-    #                 except Exception as e:
-    #                     print(e)
-    #             # print(self.link_costs)
-    #
-    #     except Exception as e:
-    #         print(f"Error handling client: {e}")
-    #     finally:
-    #         client_socket.close()
-
     def process_command(self, command):
         parts = command.split()
         if len(parts) == 0:
@@ -230,7 +205,7 @@ class DistanceVectorRouting:
                 self.update(parts)
             elif cmd == "step":
                 self.send_update(len(self.routing_table))
-                print("Step executed.")
+                print("step SUCCESS")
             elif cmd == "packets":
                 self.handle_packets()
             elif cmd == "display":
@@ -242,9 +217,10 @@ class DistanceVectorRouting:
                 self.shutdown()
             else:
                 print(
-                    f"Unknown command: {command}. Available commands: update, step, packets, display, disable, crash.")
+                    f"{command} ERROR: Unknown command. Available commands: update, step, packets, display, disable, "
+                    f"crash.")
         except Exception as e:
-            print(f"Error handling command: '{command} : {e}")
+            print(f"{command} Error handling command: {e}")
 
     def start_server(self):
         self.setup_server_socket()
@@ -253,6 +229,20 @@ class DistanceVectorRouting:
         threading.Thread(target=self.connect_to_neighbors, daemon=True).start()
         threading.Thread(target=self.periodic_update, args=(self.update_interval,), daemon=True).start()
         threading.Thread(target=self.monitor_neighbors, args=(self.update_interval,), daemon=True).start()
+
+        # Test message parsing (debugging)
+        print("Parsing topology and testing message format...")
+        num_entries = len(self.routing_table)
+
+        # Debug
+        message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
+        for dest_id, (next_hop, cost) in self.routing_table.items():
+            if cost != float('inf'):  # Skip unreachable destinations
+                server_ip, server_port = self.server_details[dest_id]
+                message += struct.pack('<4s H H f', socket.inet_aton(server_ip), server_port, dest_id, cost)
+
+        parsed_data = self.parse_message(message)
+        print(f"Parsed message: {parsed_data}")
 
         # Command input loop runs in the main thread to prevent immediate exit
         self.command_input_loop()
@@ -300,12 +290,27 @@ class DistanceVectorRouting:
 
     def send_update(self, num_entries):
         with self.routing_table_lock:
+            # Pack the header: Number of update fields, sender's port, sender's IP
             message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
+
+            # Pack each routing table entry: Server IP, port, ID, cost
             for dest_id, (next_hop, cost) in self.routing_table.items():
                 if cost != float('inf'):  # Include only reachable destinations
                     server_ip, server_port = self.server_details[dest_id]
                     message += struct.pack('<4s H H f', socket.inet_aton(server_ip), server_port, dest_id, cost)
 
+        # Debug
+        # print(f"Packed message to be sent: {message}")
+        print("Sending update:")
+        print(f"Number of entries: {num_entries}")
+        print(f"Server port: {self.port}")
+        print(f"Server IP: {self.ip}")
+        # Debug
+
+        for dest_id, (next_hop, cost) in self.routing_table.items():
+            print(f"Destination ID: {dest_id}, Next Hop: {next_hop}, Cost: {cost}")
+
+        # Send the packed message to all neighbors
         for neighbor_id, conn in self.connections.items():
             try:
                 conn.send(message)
