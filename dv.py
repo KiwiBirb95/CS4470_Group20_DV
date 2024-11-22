@@ -1,7 +1,9 @@
 import socket
 import sys
 import threading
-import struct #Library for message formatting
+import struct  # Library for message formatting
+import time
+
 
 def get_local_ip():
     try:
@@ -24,7 +26,8 @@ class DistanceVectorRouting:
         self.connections = {}
         self.stop_event = threading.Event()
         self.link_costs = {}  # Link costs between servers, (host server id, destination server id) : cost
-        self.routing_table = [] # array containing dict entries: ip, port, server_id, cost
+        self.routing_table = []  # array containing dict entries: ip, port, server_id, cost
+
     def parse_topology_file(self):
         try:
             with open(self.topology_file, 'r') as file:
@@ -48,7 +51,8 @@ class DistanceVectorRouting:
                 for i in range(2, 2 + num_servers):
                     server_id, server_ip, server_port = lines[i].strip().split()
                     if int(server_id) != int(self.server_id):
-                        self.routing_table.append({"server_ip" : server_ip, 'server_port' : int(server_port), "server_id": int(server_id)} )
+                        self.routing_table.append(
+                            {"server_ip": server_ip, 'server_port': int(server_port), "server_id": int(server_id)})
                     # Initialize link costs between servers
                 for i in range(counter, len(lines)):
                     source_id, destination_id, cost = lines[i].strip().split()
@@ -190,7 +194,6 @@ class DistanceVectorRouting:
         sys.exit(0)
 
     def send_update(self, num_entries, routing_table):
-        pass
         message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
         for entry in routing_table:
             server_ip_n = entry['server_ip']
@@ -200,19 +203,58 @@ class DistanceVectorRouting:
             message += struct.pack('<4s H H H', socket.inet_aton(server_ip_n), server_port_n, server_id_n, cost_n)
 
     def periodic_update(self):
-        pass
+        while not self.stop_event.is_set():
+            try:
+                self.send_update()
+                time.sleep(10)
+            except Exception as e:
+                print(f"Error during periodic update: {e}")
 
     def handle_incoming_messages(self):
-        pass
+        while not self.stop_event.is_set():
+            try:
+                message, addr = self.server_socket.recvfrom(1024)
+                message = message.decode()
+                print(f"Received routing update from {addr}: {message}")
+                self.apply_bellman_ford(message)
+            except Exception as e:
+                print(f"Error handling incoming message: {e}")
 
     def initialise_routing_table(self):
-        pass
+        for server_id in self.server_details.keys():
+            if server_id in self.server_id:
+                self.routing_table[server_id] = (server_id, 0)
+            elif (self.server_id, server_id) in self.link_costs:
+                self.routing_table[server_id] = (server_id, 0)
+            else:
+                self.routing_table[server_id] = (None, float('inf'))
+        print("fInitial routing table: {self.routing_table}")
 
-    def apply_bellman_ford(self):
-        pass
+    def apply_bellman_ford(self, received_routing_table):
+        updated = False
+        sender_id = received_routing_table['server_id']
+        sender_table = received_routing_table['routing_table']
+
+        for dest_id, (next_hop, cost) in sender_table.items():
+            if dest_id not in self.routing_table:
+                self.routing_table[dest_id] = (sender_id, cost + self.link_costs[(self.server_id, sender_id)])
+                updated = True
+            else:
+                current_cost = self.routing_table[dest_id][1]
+                new_cost = cost + self.link_costs[(self.server_id, sender_id)]
+                if new_cost < current_cost:
+                    self.routing_table[dest_id] = (sender_id, new_cost)
+                    updated = True
+
+        if updated:
+            print(f"Routing table updated: {self.routing_table}")
 
     def handle_display(self):
-        pass
+        print("Routing Table:")
+        for dest_id, (next_hop, cost) in sorted(self.routing_table.items()):
+            cost_str = "inf" if cost == float('inf') else str(cost)
+            next_hop_str = "-" if next_hop is None else str(next_hop)
+            print(f"{dest_id}: {next_hop_str} {cost_str}")
 
     def handle_packets(self):
         pass
