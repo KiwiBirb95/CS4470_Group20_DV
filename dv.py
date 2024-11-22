@@ -128,6 +128,7 @@ class DistanceVectorRouting:
                                                                                     message[offset: offset + 12])
                             server_ip = socket.inet_ntoa(server_ip)
                             offset += 12  # 4 byte ip, 2 byte port, 2 byte id, 4 byte cost
+                            #print(server_ip, server_port, server_id, cost)
                     except Exception as e:
                         print(e)
                 # print(self.link_costs)
@@ -199,7 +200,6 @@ class DistanceVectorRouting:
         sys.exit(0)
 
     def send_update(self, num_entries):
-        pass
         message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
         for entry in self.routing_table:
             server_ip_n = entry['server_ip']
@@ -224,16 +224,48 @@ class DistanceVectorRouting:
             time.sleep(int(interval))
 
     def handle_incoming_messages(self):
-        pass
+        while not self.stop_event.is_set():
+            try:
+                message, addr = self.server_socket.recvfrom(1024)
+                message = message.decode()
+                print(f"Received routing update from {addr}: {message}")
+                self.apply_bellman_ford(message)
+            except Exception as e:
+                print(f"Error handling incoming message: {e}")
 
     def initialise_routing_table(self):
-        pass
+        for server_id in self.server_details.keys():
+            if server_id in self.server_id:
+                self.routing_table[server_id] = (server_id, 0)
+            elif (self.server_id, server_id) in self.link_costs:
+                self.routing_table[server_id] = (server_id, 0)
+            else:
+                self.routing_table[server_id] = (None, float('inf'))
+        print("fInitial routing table: {self.routing_table}")
+    def apply_bellman_ford(self, received_routing_table):
+        updated = False
+        sender_id = received_routing_table['server_id']
+        sender_table = received_routing_table['routing_table']
+        for dest_id, (next_hop, cost) in sender_table.items():
+            if dest_id not in self.routing_table:
+                self.routing_table[dest_id] = (sender_id, cost + self.link_costs[(self.server_id, sender_id)])
+                updated = True
+            else:
+                current_cost = self.routing_table[dest_id][1]
+                new_cost = cost + self.link_costs[(self.server_id, sender_id)]
+                if new_cost < current_cost:
+                    self.routing_table[dest_id] = (sender_id, new_cost)
+                    updated = True
 
-    def apply_bellman_ford(self):
-        pass
+        if updated:
+            print(f"Routing table updated: {self.routing_table}")
 
     def handle_display(self):
-        pass
+        print("Routing Table:")
+        for dest_id, (next_hop, cost) in sorted(self.routing_table.items()):
+            cost_str = "inf" if cost == float('inf') else str(cost)
+            next_hop_str = "-" if next_hop is None else str(next_hop)
+            print(f"{dest_id}: {next_hop_str} {cost_str}")
 
     def handle_packets(self):
         pass
@@ -246,7 +278,6 @@ class DistanceVectorRouting:
 
     def handle_crash(self):  # Can be implemented using shutdown()
         pass
-
 
 if __name__ == "__main__":
     if len(sys.argv) != 5 or sys.argv[1] != "-t" or sys.argv[3] != "-i" or (
