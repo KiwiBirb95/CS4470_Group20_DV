@@ -191,6 +191,9 @@ class DistanceVectorRouting:
            # Parse the incoming message
            num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
 
+           # Debug: Display the received message
+           print(f"DEBUG: Received update from {sender_ip}:{sender_port} (Server {sender_id})")
+           print(f"DEBUG: Parsed Routing Table from Server {sender_id}: {update_table}")
 
            # Apply Bellman-Ford logic to update the routing table
            sender_id = 0
@@ -204,6 +207,7 @@ class DistanceVectorRouting:
            with self.routing_table_lock:
                if sender_id in self.missed_updates:
                    self.missed_updates[sender_id] = 0
+
            print(f"RECEIVED A MESSAGE FROM SERVER {sender_id}")
        except Exception as e:
            print(f"Error processing incoming update: {e}")
@@ -408,29 +412,28 @@ class DistanceVectorRouting:
                self.routing_table[server_id] = (None, float('inf'))
        print("fInitial routing table: {self.routing_table}")
 
-
    def apply_bellman_ford(self, received_routing_table, sender_id):
        updated = False
        for dest_id, server_details in received_routing_table.items():
            if dest_id == self.server_id:
-               continue  # Skip self
-           cost = server_details['cost']
-           # Calculate the new cost via the sender
-           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + cost
+               continue
 
+           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
+           current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
-           with self.routing_table_lock:
-               current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
+           # Debug: Display the current and new costs
+           print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
+           print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
 
+           if new_cost < current_cost:
+               self.routing_table[dest_id] = (sender_id, new_cost)
+               updated = True
 
-               if new_cost < current_cost:
-                   # Update the routing table with better cost
-                   self.routing_table[dest_id] = (sender_id, new_cost)
-                   updated = True
-
+               # Debug: Log the update
+               print(f"    Updating route to {dest_id}: Next Hop -> {sender_id}, Cost -> {new_cost}")
 
        if updated:
-           print(f"Routing table updated by applying Bellman-Ford from server {sender_id}.")
+           print(f"Routing table updated at Server {self.server_id}: {self.routing_table}")
            self.send_update(len(self.routing_table))
 
 
