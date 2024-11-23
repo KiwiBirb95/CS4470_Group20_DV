@@ -48,7 +48,6 @@ class DistanceVectorRouting:
 
                # First two lines specify the number of servers and neighbors
                num_servers = int(lines[0].strip())
-               num_neighbors = int(lines[1].strip())
 
 
                # Parse server details
@@ -168,7 +167,7 @@ class DistanceVectorRouting:
                    'cost' : cost
                } # nested dict
                offset += 12
-               if(sender_ip == server_ip):
+               if sender_ip == server_ip:
                    print(f"RECEIVED AN UPDATE FROM SERVER: {server_id}")
 
 
@@ -324,26 +323,29 @@ class DistanceVectorRouting:
        except ValueError:
            print("update ERROR: Invalid input. Use: update <server-ID1> <server-ID2> <Link Cost>")
 
-
    def shutdown(self):
        print("Simulating server shutdown...")
        self.stop_event.set()  # Stop all periodic tasks and monitoring
+
+       # Close all active connections
        for neighbor_id, conn in list(self.connections.items()):
            try:
                conn.close()
-           except Exception:
-               pass
+           except socket.error as e:
+               print(f"Error closing connection with neighbor {neighbor_id}: {e}")
            self.link_costs[(self.server_id, neighbor_id)] = float('inf')
            self.routing_table[neighbor_id] = (None, float('inf'))
        self.connections.clear()  # Clear all active connections
+
+       # Close the server socket
        if self.server_socket:
            try:
                self.server_socket.close()
-           except Exception:
-               pass
+           except socket.error as e:
+               print(f"Error closing server socket: {e}")
+
        print("Server has shut down.")
        sys.exit(0)  # Exit the program
-
 
    def send_update(self, num_entries):
        with self.routing_table_lock:
@@ -390,17 +392,29 @@ class DistanceVectorRouting:
                print(f"Runtime error during periodic update: {e}")
                break
 
-
    def handle_incoming_messages(self):
        while not self.stop_event.is_set():
            try:
-               message, addr = self.server_socket.recvfrom(1024)
-               message = message.decode()
-               print(f"Received routing update from {addr}: {message}")
-               self.apply_bellman_ford(message)
+               message, addr = self.server_socket.recvfrom(1024)  # Receive raw message
+               num_entries, sender_port, sender_ip, routing_table = self.parse_message(message)  # Parse message
+               sender_id = None
+
+               # Determine sender_id from sender_ip and sender_port
+               for server_id, server_details in self.server_details.items():
+                   if server_details[0] == sender_ip and server_details[1] == sender_port:
+                       sender_id = server_id
+                       break
+
+               if sender_id is None:
+                   print(f"Error: Could not determine sender ID for {sender_ip}:{sender_port}.")
+                   continue
+
+               print(f"Received routing update from {addr}: {routing_table}")
+
+               # Call apply_bellman_ford with parsed routing table and sender_id
+               self.apply_bellman_ford(routing_table, sender_id)
            except Exception as e:
                print(f"Error handling incoming message: {e}")
-
 
    def initialise_routing_table(self):
        for server_id in self.server_details.keys():
