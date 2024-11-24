@@ -32,6 +32,7 @@ class DistanceVectorRouting:
         self.neighbors = {}
         self.server_socket = None
         self.missed_updates = {neighbor_id: 0 for neighbor_id in self.neighbors.keys()}
+        self.packets = 0
 
     def parse_topology_file(self):
         try:
@@ -157,7 +158,7 @@ class DistanceVectorRouting:
             # Print each entry
             # for entry in routing_table:
             # print(f"Routing Table Entry: {entry}")
-
+            self.packets += 1
             return num_entries, sender_port, sender_ip, routing_table
         except Exception as e:
             print(f"Error parsing message: {e}")
@@ -438,10 +439,19 @@ class DistanceVectorRouting:
                     self.shutdown()
 
     def handle_packets(self):
-        pass
+        print("packets SUCCESS")
+        print(self.packets)
+        self.packets = 0
 
-    def handle_disable(self):
-        pass
+    def handle_disable(self, server_id):
+        for dest_id, (next_hop, cost) in self.routing_table.items():
+            if dest_id == next_hop and server_id == dest_id:
+                try:
+                    client_socket = self.connections[server_id]
+                    client_socket.close()
+                    print(f"disable {server_id} SUCCESS")
+                except Exception as e:
+                    print(f"Error closing connection: {e}")
 
 
 if __name__ == "__main__":
