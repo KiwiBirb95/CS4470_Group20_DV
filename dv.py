@@ -136,32 +136,27 @@ class DistanceVectorRouting:
 
    def parse_message(self, message):
        try:
-           # Unpack the header
            num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', message[:8])
            sender_ip = socket.inet_ntoa(sender_ip)
 
-           # Debug: Print the parsed header
-           print(f"Number of update fields: {num_entries}")
-           print(f"Server port: {sender_port}")
-           print(f"Server IP: {sender_ip}")
            print(
                f"DEBUG: Parsed Header: Number of Entries={num_entries}, Sender Port={sender_port}, Sender IP={sender_ip}")
 
-           # Unpack the routing table entries
            offset = 8
            routing_table = {}
            for _ in range(num_entries):
-               server_ip, server_port, server_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
-               server_ip = socket.inet_ntoa(server_ip)
-               routing_table[server_id] = {
-                   'server_ip': server_ip,
-                   'server_port': server_port,
-                   'cost': cost
-               }
-               offset += 12
+               try:
+                   server_ip, server_port, server_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
+                   server_ip = socket.inet_ntoa(server_ip)
+                   if cost < 0 or cost == float('inf') or not (1 <= server_id <= len(self.server_details)):
+                       raise ValueError(f"Invalid entry: Server ID={server_id}, Cost={cost}")
+                   routing_table[server_id] = {'server_ip': server_ip, 'server_port': server_port, 'cost': cost}
+                   offset += 12
+               except (struct.error, ValueError) as e:
+                   print(f"Skipping invalid routing table entry: {e}")
+                   offset += 12  # Skip this entry
 
-           # Debug: Print the parsed routing table
-           print(f"Parsed Routing Table: {routing_table}")
+           print(f"DEBUG: Parsed Routing Table: {routing_table}")
            return num_entries, sender_port, sender_ip, routing_table
        except Exception as e:
            print(f"Error parsing message: {e}")
@@ -304,7 +299,7 @@ class DistanceVectorRouting:
 
    def shutdown(self):
        print("Simulating server shutdown...")
-       self.stop_event.set()  # Stop tasks and monitoring
+       self.stop_event.set()
        for neighbor_id, conn in list(self.connections.items()):
            try:
                conn.close()
@@ -313,7 +308,7 @@ class DistanceVectorRouting:
            self.link_costs[(self.server_id, neighbor_id)] = float('inf')
            self.routing_table[neighbor_id] = (None, float('inf'))
 
-       self.connections.clear()  # Clear active connections
+       self.connections.clear()
        if self.server_socket:
            try:
                self.server_socket.close()
@@ -404,10 +399,13 @@ class DistanceVectorRouting:
    def apply_bellman_ford(self, received_routing_table, sender_id):
        updated = False
        for dest_id, details in received_routing_table.items():
+           if dest_id not in self.server_details:
+               print(f"Skipping unknown server ID {dest_id} in update.")
+               continue
+
            if dest_id == self.server_id:
                continue
 
-           # Calculate the cost via the sender
            new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + details['cost']
            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
