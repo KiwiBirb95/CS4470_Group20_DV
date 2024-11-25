@@ -351,16 +351,17 @@ class DistanceVectorRouting:
            except Exception as e:
                print(f"Error sending update to server {neighbor_id}: {e}")
 
-
-   def periodic_update(self, interval):
+   def periodic_update(self):
        while not self.stop_event.is_set():
-           time.sleep(interval)
-           num_entries = len(self.routing_table)
            try:
-               self.send_update(num_entries)
+               with self.routing_table_lock:  # Ensure thread-safe access
+                   num_entries = len(self.routing_table)
+                   self.send_update(num_entries)
+               time.sleep(self.update_interval)
            except RuntimeError as e:
                print(f"Runtime error during periodic update: {e}")
-               break
+           except Exception as e:
+               print(f"Unexpected error during periodic update: {e}")
 
    def handle_incoming_messages(self):
        while not self.stop_event.is_set():
@@ -420,15 +421,18 @@ class DistanceVectorRouting:
            print(f"Routing table updated at Server {self.server_id}: {self.routing_table}")
            self.send_update(len(self.routing_table))
 
-   def handle_display(self):
-       print("Routing Table:")
-       with self.routing_table_lock:
-           for dest_id in sorted(self.routing_table.keys()):
-               next_hop, cost = self.routing_table[dest_id]
-               cost_str = "inf" if cost == float('inf') else str(cost)
-               next_hop_str = "-" if next_hop is None else str(next_hop)
-               print(f"{dest_id}: {next_hop_str} {cost_str}")
-       print("display SUCCESS")
+   def display(self):
+       try:
+           with self.routing_table_lock:  # Ensure thread-safe access
+               print("Routing Table:")
+               for server_id, (next_hop, cost) in self.routing_table.items():
+                   if cost == float('inf'):
+                       print(f"{server_id}: - inf")
+                   else:
+                       print(f"{server_id}: {next_hop} {cost}")
+           print("display SUCCESS")
+       except Exception as e:
+           print(f"Error during display: {e}")
 
    def monitor_neighbors(self, interval):
        time.sleep(interval * 3)  # Grace period
