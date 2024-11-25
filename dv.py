@@ -1,4 +1,3 @@
-import os
 import socket
 import json
 import threading
@@ -6,6 +5,8 @@ import time
 from typing import Dict, List, Tuple
 import struct
 import sys
+import os
+
 
 def get_public_ip():
     """Get public-facing IP by connecting to Google's DNS."""
@@ -18,6 +19,7 @@ def get_public_ip():
     except Exception as e:
         print(f"Error getting IP address: {e}")
         sys.exit(1)
+
 
 class DVRouter:
     def __init__(self, topology_file: str, update_interval: int):
@@ -77,7 +79,7 @@ class DVRouter:
 
             print(f"Successfully initialized as Server {self.server_id} ({self.ip}:{self.port})")
 
-            # Initialize routing table with infinity costs
+            # Initialize routing table
             for server_id in self.servers:
                 if server_id == self.server_id:
                     self.routing_table[server_id] = (self.server_id, 0)
@@ -117,23 +119,9 @@ class DVRouter:
             print(f"Error reading topology file: {e}")
             raise
 
-    def find_my_port(self) -> int:
-        """No longer needed as we handle IP matching in read_topology"""
-        pass
-
     def create_update_message(self) -> bytes:
         """Create a distance vector update message."""
-        # Message format from PDF:
-        # - Number of update fields (2 bytes)
-        # - Server port (2 bytes)
-        # - Server IP (4 bytes)
-        # - For each update:
-        #   - Server IP (4 bytes)
-        #   - Server port (2 bytes)
-        #   - Padding (2 bytes)
-        #   - Server ID (2 bytes)
-        #   - Cost (2 bytes)
-
+        # Message format as per PDF specification
         updates = []
         ip_parts = list(map(int, self.ip.split('.')))
 
@@ -149,11 +137,14 @@ class DVRouter:
             dest_ip, dest_port = self.servers[dest_id]
             dest_ip_parts = list(map(int, dest_ip.split('.')))
 
+            # Convert infinity to max unsigned 16-bit integer
+            cost_value = 0xFFFF if cost == float('inf') else int(cost)
+
             update = struct.pack('!4BHxx2H',
                                  *dest_ip_parts,  # server_ip
                                  dest_port,  # server_port
                                  dest_id,  # server_id
-                                 int(cost) if cost != float('inf') else 0xFFFF  # cost
+                                 cost_value  # cost
                                  )
             updates.append(update)
 
@@ -189,10 +180,8 @@ class DVRouter:
 
             self.last_update[sender_id] = time.time()
 
-            # Get cost to sender (if they're our neighbor)
-            cost_to_sender = float('inf')
-            if sender_id in self.neighbors:
-                cost_to_sender = self.neighbors[sender_id][2]  # Get cost from neighbors dict
+            # Get cost to sender directly from routing table
+            cost_to_sender = self.routing_table[sender_id][1]
 
             # Process updates
             changed = False
@@ -217,6 +206,7 @@ class DVRouter:
                 # Skip updates about ourselves
                 if server_id != self.server_id:
                     current_cost = self.routing_table[server_id][1]
+                    current_next_hop = self.routing_table[server_id][0]
 
                     # Calculate new path cost through sender
                     path_cost = float('inf') if cost == float('inf') or cost_to_sender == float(
@@ -256,12 +246,27 @@ class DVRouter:
 
     def send_updates(self):
         """Send routing updates to all neighbors."""
-        message = self.create_update_message()
-        for neighbor_id, (ip, port, _) in self.neighbors.items():
-            try:
-                self.sock.sendto(message, (ip, port))
-            except Exception as e:
-                print(f"Error sending update to neighbor {neighbor_id}: {e}")
+        try:
+            message = self.create_update_message()
+            for neighbor_id, (ip, port, _) in self.neighbors.items():
+                try:
+                    self.sock.sendto(message, (ip, port))
+                except Exception as e:
+                    print(f"Error sending update to neighbor {neighbor_id}: {e}")
+        except Exception as e:
+            print(f"Error creating/sending updates: {e}")
+
+    def check_timeouts(self):
+        """Check for neighbors that haven't sent updates."""
+        while self.running:
+            current_time = time.time()
+            for neighbor_id in list(self.neighbors.keys()):
+                last_update = self.last_update.get(neighbor_id, 0)
+                if current_time - last_update > self.update_interval * 3:
+                    # Mark link as infinity but keep neighbor
+                    self.neighbors[neighbor_id] = (*self.neighbors[neighbor_id][:2], float('inf'))
+                    self.routing_table[neighbor_id] = (neighbor_id, float('inf'))
+            time.sleep(self.update_interval)
 
     def receive_updates(self):
         """Listen for and process incoming updates."""
@@ -276,72 +281,15 @@ class DVRouter:
                 if self.running:  # Only print error if we're still meant to be running
                     print(f"Error receiving update: {e}")
 
-    def check_timeouts(self):
-        """Check for neighbors that haven't sent updates."""
-        while self.running:
-            current_time = time.time()
-            for neighbor_id in list(self.neighbors.keys()):
-                last_update = self.last_update.get(neighbor_id, 0)
-                if current_time - last_update > self.update_interval * 3:
-                    # Mark link as infinity but keep neighbor
-                    self.neighbors[neighbor_id] = (*self.neighbors[neighbor_id][:2], float('inf'))
-                    self.routing_table[neighbor_id] = (neighbor_id, float('inf'))
-            time.sleep(self.update_interval)
-
     def periodic_updates(self):
         """Send periodic routing updates."""
         while self.running:
-            self.send_updates()
-            time.sleep(self.update_interval)
-
-    def start(self):
-        """Start the router."""
-        self.read_topology()
-
-        # Start receiver thread
-        self.receiver_thread = threading.Thread(target=self.receive_updates)
-        self.receiver_thread.daemon = True
-        self.receiver_thread.start()
-
-        # Start periodic update thread
-        self.update_thread = threading.Thread(target=self.periodic_updates)
-        self.update_thread.daemon = True
-        self.update_thread.start()
-
-        # Start timeout checker thread
-        self.timeout_thread = threading.Thread(target=self.check_timeouts)
-        self.timeout_thread.daemon = True
-        self.timeout_thread.start()
-
-        print(f"Server {self.server_id} starting up...")
-
-        # Handle user commands
-        while True:
             try:
-                command = input().strip().split()
-                if not command:
-                    continue
-
-                if command[0] == "update":
-                    self.handle_update(command)
-                elif command[0] == "step":
-                    self.handle_step()
-                elif command[0] == "packets":
-                    self.handle_packets()
-                elif command[0] == "display":
-                    self.handle_display()
-                elif command[0] == "disable":
-                    self.handle_disable(command)
-                elif command[0] == "crash":
-                    self.handle_crash()
-                    break
-                else:
-                    print(f"{' '.join(command)} ERROR: Invalid command")
-            except KeyboardInterrupt:
-                self.handle_crash()
-                break
+                self.send_updates()
+                time.sleep(self.update_interval)
             except Exception as e:
-                print(f"Error processing command: {e}")
+                if self.running:
+                    print(f"Error in periodic updates: {e}")
 
     def handle_update(self, command):
         """Handle update command."""
@@ -373,8 +321,11 @@ class DVRouter:
 
     def handle_step(self):
         """Handle step command."""
-        self.send_updates()
-        print("step SUCCESS")
+        try:
+            self.send_updates()
+            print("step SUCCESS")
+        except Exception as e:
+            print(f"step ERROR: {e}")
 
     def handle_packets(self):
         """Handle packets command."""
@@ -384,11 +335,10 @@ class DVRouter:
     def handle_display(self):
         """Handle display command."""
         print("display SUCCESS")
-        # Sort by destination ID
         for dest_id in sorted(self.routing_table.keys()):
             next_hop, cost = self.routing_table[dest_id]
-            cost_str = 'inf' if cost == float('inf') else str(cost)
             next_hop_str = str(next_hop) if next_hop is not None else 'inf'
+            cost_str = 'inf' if cost == float('inf') else str(cost)
             print(f"{dest_id} {next_hop_str} {cost_str}")
 
     def handle_disable(self, command):
@@ -413,8 +363,65 @@ class DVRouter:
     def handle_crash(self):
         """Handle crash command."""
         self.running = False
-        self.sock.close()
+        try:
+            self.sock.close()
+        except:
+            pass
         print("crash SUCCESS")
+
+    def start(self):
+        """Start the router."""
+        try:
+            self.read_topology()
+
+            # Start receiver thread
+            self.receiver_thread = threading.Thread(target=self.receive_updates)
+            self.receiver_thread.daemon = True
+            self.receiver_thread.start()
+
+            # Start periodic update thread
+            self.update_thread = threading.Thread(target=self.periodic_updates)
+            self.update_thread.daemon = True
+            self.update_thread.start()
+
+            # Start timeout checker thread
+            self.timeout_thread = threading.Thread(target=self.check_timeouts)
+            self.timeout_thread.daemon = True
+            self.timeout_thread.start()
+
+            print(f"Server {self.server_id} starting up...")
+
+            # Handle user commands
+            while True:
+                try:
+                    command = input().strip().split()
+                    if not command:
+                        continue
+
+                    if command[0] == "update":
+                        self.handle_update(command)
+                    elif command[0] == "step":
+                        self.handle_step()
+                    elif command[0] == "packets":
+                        self.handle_packets()
+                    elif command[0] == "display":
+                        self.handle_display()
+                    elif command[0] == "disable":
+                        self.handle_disable(command)
+                    elif command[0] == "crash":
+                        self.handle_crash()
+                        break
+                    else:
+                        print(f"{' '.join(command)} ERROR: Invalid command")
+                except KeyboardInterrupt:
+                    self.handle_crash()
+                    break
+                except Exception as e:
+                    print(f"Error processing command: {e}")
+
+        except Exception as e:
+            print(f"Error starting router: {e}")
+            self.handle_crash()
 
 
 def main():
