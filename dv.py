@@ -5,6 +5,19 @@ import sys
 import struct
 import json
 
+def get_local_ip():
+    """
+    Retrieves the local IP address by connecting to an external server (Google's DNS).
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            # Connect to Google's public DNS server
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]  # Get the local IP address
+    except Exception as e:
+        print(f"Error determining local IP: {e}")
+        sys.exit(1)
+
 class DistanceVectorRouting:
     def __init__(self, topology_file, update_interval):
         self.topology_file = topology_file
@@ -21,17 +34,20 @@ class DistanceVectorRouting:
         try:
             with open(self.topology_file, 'r') as file:
                 lines = file.readlines()
-                num_servers = int(lines[0].strip())
-                num_neighbors = int(lines[1].strip())
+                if len(lines) < 2:
+                    raise ValueError("Invalid topology file format. Must contain at least two lines.")
 
-                # Server details
+                # Parse the number of servers and neighbors
+                num_servers, num_neighbors = map(int, lines[0].strip().split())
+
+                # Parse server details
                 self.server_details = {}
-                for i in range(2, 2 + num_servers):
+                for i in range(1, 1 + num_servers):
                     server_id, server_ip, server_port = lines[i].strip().split()
                     self.server_details[int(server_id)] = (server_ip, int(server_port))
 
-                # Determine this server's ID
-                local_ip = socket.gethostbyname(socket.gethostname())
+                # Determine this server's ID based on its real IP
+                local_ip = get_local_ip()
                 for server_id, (server_ip, server_port) in self.server_details.items():
                     if server_ip == local_ip:
                         self.server_id = server_id
@@ -43,7 +59,8 @@ class DistanceVectorRouting:
                     raise ValueError(f"Local IP {local_ip} not found in the topology file.")
 
                 # Parse neighbor information
-                for i in range(2 + num_servers, len(lines)):
+                self.neighbors = {}
+                for i in range(1 + num_servers, len(lines)):
                     server1, server2, cost = map(int, lines[i].strip().split())
                     if server1 == self.server_id:
                         self.neighbors[server2] = cost
@@ -51,13 +68,14 @@ class DistanceVectorRouting:
                         self.neighbors[server1] = cost
 
                 # Initialize routing table
+                self.routing_table = {}
                 for server_id in self.server_details.keys():
                     if server_id == self.server_id:
-                        self.routing_table[server_id] = (server_id, 0)
+                        self.routing_table[server_id] = (server_id, 0)  # Cost to self is 0
                     elif server_id in self.neighbors:
-                        self.routing_table[server_id] = (server_id, self.neighbors[server_id])
+                        self.routing_table[server_id] = (server_id, self.neighbors[server_id])  # Direct neighbors
                     else:
-                        self.routing_table[server_id] = (None, float('inf'))
+                        self.routing_table[server_id] = (None, float('inf'))  # Unreachable initially
 
                 print("Topology file parsed successfully.")
                 print(f"Server ID: {self.server_id}")
