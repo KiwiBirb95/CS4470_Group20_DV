@@ -144,6 +144,8 @@ class DistanceVectorRouting:
            print(f"Number of update fields: {num_entries}")
            print(f"Server port: {sender_port}")
            print(f"Server IP: {sender_ip}")
+           print(
+               f"DEBUG: Parsed Header: Number of Entries={num_entries}, Sender Port={sender_port}, Sender IP={sender_ip}")
 
            # Unpack the routing table entries
            offset = 8
@@ -167,22 +169,20 @@ class DistanceVectorRouting:
 
    def process_incoming_update(self, message, sender_id):
        try:
-           # Parse the incoming message
            num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
 
-           # Verify sender_id matches the parsed information
-           for id, server_details in update_table.items():
-               if server_details['server_port'] == sender_port and server_details['server_ip'] == sender_ip:
+           # Verify sender_id matches the parsed message
+           for id, details in update_table.items():
+               if details['server_port'] == sender_port and details['server_ip'] == sender_ip:
                    sender_id = id
                    break
            else:
                print(f"Invalid server ID in update: {sender_id}")
                return
 
-           # Apply Bellman-Ford logic to update the routing table
            self.apply_bellman_ford(update_table, sender_id)
 
-           # Reset missed updates counter for the sender
+           # Reset missed updates
            with self.routing_table_lock:
                if sender_id in self.missed_updates:
                    self.missed_updates[sender_id] = 0
@@ -304,27 +304,23 @@ class DistanceVectorRouting:
 
    def shutdown(self):
        print("Simulating server shutdown...")
-       self.stop_event.set()  # Stop all periodic tasks and monitoring
-
-       # Close all active connections
+       self.stop_event.set()  # Stop tasks and monitoring
        for neighbor_id, conn in list(self.connections.items()):
            try:
                conn.close()
-           except socket.error as e:
-               print(f"Error closing connection with neighbor {neighbor_id}: {e}")
+           except Exception as e:
+               print(f"Error closing connection to server {neighbor_id}: {e}")
            self.link_costs[(self.server_id, neighbor_id)] = float('inf')
            self.routing_table[neighbor_id] = (None, float('inf'))
-       self.connections.clear()  # Clear all active connections
 
-       # Close the server socket
+       self.connections.clear()  # Clear active connections
        if self.server_socket:
            try:
                self.server_socket.close()
-           except socket.error as e:
+           except Exception as e:
                print(f"Error closing server socket: {e}")
-
        print("Server has shut down.")
-       sys.exit(0)  # Exit the program
+       sys.exit(0)
 
    def send_update(self, num_entries):
        with self.routing_table_lock:
@@ -407,20 +403,18 @@ class DistanceVectorRouting:
 
    def apply_bellman_ford(self, received_routing_table, sender_id):
        updated = False
-       for dest_id, server_details in received_routing_table.items():
+       for dest_id, details in received_routing_table.items():
            if dest_id == self.server_id:
-               continue  # Skip self
+               continue
 
-           # Calculate the new cost via the sender
-           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
+           # Calculate the cost via the sender
+           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + details['cost']
            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
-           # Debug: Print cost comparisons
            print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
            print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
 
            if new_cost < current_cost:
-               # Update the routing table with better cost
                self.routing_table[dest_id] = (sender_id, new_cost)
                updated = True
 
@@ -439,19 +433,20 @@ class DistanceVectorRouting:
        print("display SUCCESS")
 
    def monitor_neighbors(self, interval):
-       time.sleep(interval * 3)  # Grace period: 3 intervals
+       time.sleep(interval * 3)  # Grace period
        while not self.stop_event.is_set():
            time.sleep(interval)
            with self.routing_table_lock:
+               neighbors_copy = list(self.missed_updates.keys())
                all_neighbors_unreachable = True
-               for neighbor_id in self.missed_updates.keys():
+               for neighbor_id in neighbors_copy:
                    self.missed_updates[neighbor_id] += 1
                    if self.missed_updates[neighbor_id] > 3:  # Missed 3 intervals
                        self.link_costs[(self.server_id, neighbor_id)] = float('inf')
                        self.routing_table[neighbor_id] = (None, float('inf'))
                        print(f"Link to server {neighbor_id} set to infinity due to missed updates.")
                    else:
-                       all_neighbors_unreachable = False  # At least one neighbor is reachable
+                       all_neighbors_unreachable = False
 
                if all_neighbors_unreachable:
                    print("All neighbors are unreachable. Shutting down server...")
