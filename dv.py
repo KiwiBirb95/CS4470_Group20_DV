@@ -41,17 +41,23 @@ class DistanceVectorRouting:
        try:
            with open(self.topology_file, 'r') as file:
                lines = file.readlines()
-               if len(lines) < 2:
-                   raise ValueError("Invalid topology file format. Must contain at least two lines.")
+               if len(lines) < 3:
+                   raise ValueError("Invalid topology file format. Must contain at least three lines.")
 
-               # Parse the number of servers and neighbors from the first line
-               num_servers, num_neighbors = map(int, lines[0].strip().split())
+               # First line: number of servers
+               num_servers = int(lines[0].strip())
+
+               # Second line: number of neighbors (not strictly required for logic)
+               num_neighbors = int(lines[1].strip())
 
                # Parse server details
                self.server_details = {}
-               for i in range(1, 1 + num_servers):
-                   server_id, server_ip, server_port = lines[i].strip().split()
-                   self.server_details[int(server_id)] = (server_ip, int(server_port))
+               for i in range(2, 2 + num_servers):
+                   try:
+                       server_id, server_ip, server_port = lines[i].strip().split()
+                       self.server_details[int(server_id)] = (server_ip, int(server_port))
+                   except ValueError:
+                       raise ValueError(f"Invalid server details on line {i + 1}: {lines[i].strip()}")
 
                # Determine this server's ID based on its IP
                local_ip = get_local_ip()
@@ -67,12 +73,15 @@ class DistanceVectorRouting:
 
                # Parse neighbor information
                self.neighbors = {}
-               for i in range(1 + num_servers, len(lines)):
-                   server1, server2, cost = map(int, lines[i].strip().split())
-                   if server1 == self.server_id:
-                       self.neighbors[server2] = cost
-                   elif server2 == self.server_id:
-                       self.neighbors[server1] = cost
+               for i in range(2 + num_servers, len(lines)):
+                   try:
+                       server1, server2, cost = map(int, lines[i].strip().split())
+                       if server1 == self.server_id:
+                           self.neighbors[server2] = cost
+                       elif server2 == self.server_id:
+                           self.neighbors[server1] = cost
+                   except ValueError:
+                       raise ValueError(f"Invalid neighbor details on line {i + 1}: {lines[i].strip()}")
 
                # Initialize routing table
                self.routing_table = {}
@@ -89,8 +98,14 @@ class DistanceVectorRouting:
                print(f"Neighbors: {self.neighbors}")
                print(f"Routing Table: {self.routing_table}")
 
+       except FileNotFoundError:
+           print(f"Error: Topology file '{self.topology_file}' not found.")
+           sys.exit(1)
+       except ValueError as ve:
+           print(f"Error: {ve}")
+           sys.exit(1)
        except Exception as e:
-           print(f"Error reading topology file: {e}")
+           print(f"Unexpected error reading topology file: {e}")
            sys.exit(1)
 
    def setup_server_socket(self):
@@ -197,31 +212,26 @@ class DistanceVectorRouting:
        except Exception as e:
            print(f"Error processing incoming update: {e}")
 
-
    def handle_client(self, client_socket, client_address):
        try:
+           buffer = b""
            while not self.stop_event.is_set():
-               # Receive raw binary data
-               message = client_socket.recv(1024)
-               if not message:
+               data = client_socket.recv(1024)
+               if not data:
                    break
-
-
-               # Parse the binary message and process it
-               sender_id = 0 #placeholder
-               num_entries, sender_port, sender_ip, parsed_table = self.parse_message(message)
-               for id, server_details in parsed_table.items():
-                   if server_details['server_port'] == sender_port and server_details['server_ip'] == sender_ip:
-                       sender_id = id
-
-
-               # Process the incoming update
-               self.process_incoming_update(message, sender_id)
+               buffer += data
+               while len(buffer) >= 8:  # Minimum size for header
+                   num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', buffer[:8])
+                   expected_size = 8 + (num_entries * 12)
+                   if len(buffer) < expected_size:
+                       break  # Wait for more data
+                   # Parse message
+                   self.parse_message(buffer[:expected_size])
+                   buffer = buffer[expected_size:]  # Remove processed message
        except Exception as e:
            print(f"Error handling client {client_address}: {e}")
        finally:
            client_socket.close()
-
 
    def process_command(self, command):
        parts = command.split()
