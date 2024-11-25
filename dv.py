@@ -166,21 +166,15 @@ class DistanceVectorRouting:
        try:
            num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
 
-           # Verify sender_id matches the parsed message
-           for id, details in update_table.items():
-               if details['server_port'] == sender_port and details['server_ip'] == sender_ip:
-                   sender_id = id
-                   break
-           else:
-               print(f"Invalid server ID in update: {sender_id}")
+           # Ensure sender_id is valid
+           if sender_id not in self.neighbors:
+               print(f"Invalid sender ID {sender_id} in update. Ignoring.")
                return
 
            self.apply_bellman_ford(update_table, sender_id)
 
-           # Reset missed updates
            with self.routing_table_lock:
-               if sender_id in self.missed_updates:
-                   self.missed_updates[sender_id] = 0
+               self.missed_updates[sender_id] = 0  # Reset missed updates counter
 
            print(f"RECEIVED A MESSAGE FROM SERVER {sender_id}")
        except Exception as e:
@@ -351,7 +345,7 @@ class DistanceVectorRouting:
            except Exception as e:
                print(f"Error sending update to server {neighbor_id}: {e}")
 
-   def periodic_update(self):
+   def periodic_update(self, *args):  # Accept additional arguments to prevent errors
        while not self.stop_event.is_set():
            try:
                with self.routing_table_lock:  # Ensure thread-safe access
@@ -399,15 +393,12 @@ class DistanceVectorRouting:
 
    def apply_bellman_ford(self, received_routing_table, sender_id):
        updated = False
-       for dest_id, details in received_routing_table.items():
-           if dest_id not in self.server_details:
-               print(f"Skipping unknown server ID {dest_id} in update.")
-               continue
-
+       print(f"DEBUG: Applying Bellman-Ford from sender {sender_id}")
+       for dest_id, server_details in received_routing_table.items():
            if dest_id == self.server_id:
                continue
 
-           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + details['cost']
+           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
            print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
@@ -453,6 +444,13 @@ class DistanceVectorRouting:
                if all_neighbors_unreachable:
                    print("All neighbors are unreachable. Shutting down server...")
                    self.shutdown()
+
+   def check_neighbors(self):
+       with self.routing_table_lock:
+           unreachable_count = sum(1 for cost in self.routing_table.values() if cost[1] == float('inf'))
+           if unreachable_count == len(self.neighbors):
+               print("All neighbors are unreachable for a prolonged time. Investigating...")
+               return  # Do not shut down immediately
 
    def handle_packets(self):
        pass
