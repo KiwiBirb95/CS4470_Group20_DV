@@ -140,24 +140,27 @@ class DistanceVectorRouting:
            num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', message[:8])
            sender_ip = socket.inet_ntoa(sender_ip)
 
-           # Initialize routing table for the update
-           parsed_table = {}
-           offset = 8
+           # Debug: Print the parsed header
+           print(f"Number of update fields: {num_entries}")
+           print(f"Server port: {sender_port}")
+           print(f"Server IP: {sender_ip}")
 
+           # Unpack the routing table entries
+           offset = 8
+           routing_table = {}
            for _ in range(num_entries):
-               entry_ip, entry_port, entry_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
-               entry_ip = socket.inet_ntoa(entry_ip)
+               server_ip, server_port, server_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
+               server_ip = socket.inet_ntoa(server_ip)
+               routing_table[server_id] = {
+                   'server_ip': server_ip,
+                   'server_port': server_port,
+                   'cost': cost
+               }
                offset += 12
 
-               # Validate the server ID
-               if entry_id not in self.server_details:
-                   print(f"Invalid server ID in update: {entry_id}")
-                   continue
-
-               # Add to parsed table
-               parsed_table[entry_id] = {'server_ip': entry_ip, 'server_port': entry_port, 'cost': cost}
-
-           return num_entries, sender_port, sender_ip, parsed_table
+           # Debug: Print the parsed routing table
+           print(f"Parsed Routing Table: {routing_table}")
+           return num_entries, sender_port, sender_ip, routing_table
        except Exception as e:
            print(f"Error parsing message: {e}")
            raise
@@ -167,19 +170,19 @@ class DistanceVectorRouting:
            # Parse the incoming message
            num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
 
-           # Debug: Display the received message
-           print(f"DEBUG: Received update from {sender_ip}:{sender_port} (Server {sender_id})")
-           print(f"DEBUG: Parsed Routing Table from Server {sender_id}: {update_table}")
-
-           # Apply Bellman-Ford logic to update the routing table
-           sender_id = 0
+           # Verify sender_id matches the parsed information
            for id, server_details in update_table.items():
                if server_details['server_port'] == sender_port and server_details['server_ip'] == sender_ip:
                    sender_id = id
+                   break
+           else:
+               print(f"Invalid server ID in update: {sender_id}")
+               return
+
+           # Apply Bellman-Ford logic to update the routing table
            self.apply_bellman_ford(update_table, sender_id)
 
-
-           # Reset missed updates counter for this neighbor
+           # Reset missed updates counter for the sender
            with self.routing_table_lock:
                if sender_id in self.missed_updates:
                    self.missed_updates[sender_id] = 0
@@ -404,17 +407,20 @@ class DistanceVectorRouting:
 
    def apply_bellman_ford(self, received_routing_table, sender_id):
        updated = False
-       for dest_id, details in received_routing_table.items():
-           # Ignore invalid destinations
-           if dest_id not in self.server_details:
-               print(f"Ignoring update for invalid server ID: {dest_id}")
-               continue
+       for dest_id, server_details in received_routing_table.items():
+           if dest_id == self.server_id:
+               continue  # Skip self
 
-           # Calculate new cost
-           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + details['cost']
+           # Calculate the new cost via the sender
+           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
+           # Debug: Print cost comparisons
+           print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
+           print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
+
            if new_cost < current_cost:
+               # Update the routing table with better cost
                self.routing_table[dest_id] = (sender_id, new_cost)
                updated = True
 
@@ -440,9 +446,7 @@ class DistanceVectorRouting:
                all_neighbors_unreachable = True
                for neighbor_id in self.missed_updates.keys():
                    self.missed_updates[neighbor_id] += 1
-                   print(
-                       f"DEBUG: Neighbor {neighbor_id} missed updates: {self.missed_updates[neighbor_id]}")  # Log for debugging
-                   if self.missed_updates[neighbor_id] > 5:  # Increase threshold
+                   if self.missed_updates[neighbor_id] > 3:  # Missed 3 intervals
                        self.link_costs[(self.server_id, neighbor_id)] = float('inf')
                        self.routing_table[neighbor_id] = (None, float('inf'))
                        print(f"Link to server {neighbor_id} set to infinity due to missed updates.")
