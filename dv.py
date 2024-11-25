@@ -37,7 +37,6 @@ class DistanceVectorRouting:
        self.server_socket = None
        self.missed_updates = {neighbor_id: 0 for neighbor_id in self.neighbors.keys()}
 
-
    def parse_topology_file(self):
        try:
            with open(self.topology_file, 'r') as file:
@@ -45,17 +44,14 @@ class DistanceVectorRouting:
                if len(lines) < 2:
                    raise ValueError("Invalid topology file format. Must contain at least two lines.")
 
-
-               # First two lines specify the number of servers and neighbors
-               num_servers = int(lines[0].strip())
-
+               # Parse the number of servers and neighbors from the first line
+               num_servers, num_neighbors = map(int, lines[0].strip().split())
 
                # Parse server details
                self.server_details = {}
-               for i in range(2, 2 + num_servers):
+               for i in range(1, 1 + num_servers):
                    server_id, server_ip, server_port = lines[i].strip().split()
                    self.server_details[int(server_id)] = (server_ip, int(server_port))
-
 
                # Determine this server's ID based on its IP
                local_ip = get_local_ip()
@@ -66,20 +62,17 @@ class DistanceVectorRouting:
                        self.port = server_port
                        break
 
-
                if self.server_id is None:
                    raise ValueError(f"Local IP {local_ip} does not match any server in the topology file.")
 
-
                # Parse neighbor information
                self.neighbors = {}
-               for i in range(2 + num_servers, len(lines)):
+               for i in range(1 + num_servers, len(lines)):
                    server1, server2, cost = map(int, lines[i].strip().split())
                    if server1 == self.server_id:
                        self.neighbors[server2] = cost
                    elif server2 == self.server_id:
                        self.neighbors[server1] = cost
-
 
                # Initialize routing table
                self.routing_table = {}
@@ -91,21 +84,14 @@ class DistanceVectorRouting:
                    else:
                        self.routing_table[server_id] = (None, float('inf'))  # Unreachable initially
 
-
-               # Initialize missed updates counter for neighbors
-               self.missed_updates = {neighbor_id: 0 for neighbor_id in self.neighbors.keys()}
-
-
                print("Topology file parsed successfully.")
                print(f"Server ID: {self.server_id}")
                print(f"Neighbors: {self.neighbors}")
                print(f"Routing Table: {self.routing_table}")
 
-
        except Exception as e:
            print(f"Error reading topology file: {e}")
            sys.exit(1)
-
 
    def setup_server_socket(self):
        try:
