@@ -44,13 +44,9 @@ class DistanceVectorRouting:
                if len(lines) < 3:
                    raise ValueError("Invalid topology file format. Must contain at least three lines.")
 
-               # First line: number of servers
                num_servers = int(lines[0].strip())
-
-               # Second line: number of neighbors (not strictly required for logic)
                num_neighbors = int(lines[1].strip())
 
-               # Parse server details
                self.server_details = {}
                for i in range(2, 2 + num_servers):
                    try:
@@ -59,7 +55,6 @@ class DistanceVectorRouting:
                    except ValueError:
                        raise ValueError(f"Invalid server details on line {i + 1}: {lines[i].strip()}")
 
-               # Determine this server's ID based on its IP
                local_ip = get_local_ip()
                for server_id, (server_ip, server_port) in self.server_details.items():
                    if server_ip == local_ip:
@@ -71,27 +66,24 @@ class DistanceVectorRouting:
                if self.server_id is None:
                    raise ValueError(f"Local IP {local_ip} does not match any server in the topology file.")
 
-               # Parse neighbor information
                self.neighbors = {}
                for i in range(2 + num_servers, len(lines)):
-                   try:
-                       server1, server2, cost = map(int, lines[i].strip().split())
-                       if server1 == self.server_id:
-                           self.neighbors[server2] = cost
-                       elif server2 == self.server_id:
-                           self.neighbors[server1] = cost
-                   except ValueError:
-                       raise ValueError(f"Invalid neighbor details on line {i + 1}: {lines[i].strip()}")
+                   server1, server2, cost = map(int, lines[i].strip().split())
+                   if server1 == self.server_id:
+                       self.neighbors[server2] = cost
+                       self.link_costs[(server1, server2)] = cost
+                   elif server2 == self.server_id:
+                       self.neighbors[server1] = cost
+                       self.link_costs[(server2, server1)] = cost
 
-               # Initialize routing table
                self.routing_table = {}
                for server_id in self.server_details.keys():
                    if server_id == self.server_id:
-                       self.routing_table[server_id] = (server_id, 0)  # Cost to self is 0
+                       self.routing_table[server_id] = (server_id, 0)
                    elif server_id in self.neighbors:
-                       self.routing_table[server_id] = (server_id, self.neighbors[server_id])  # Direct neighbors
+                       self.routing_table[server_id] = (server_id, self.neighbors[server_id])
                    else:
-                       self.routing_table[server_id] = (None, float('inf'))  # Unreachable initially
+                       self.routing_table[server_id] = (None, float('inf'))
 
                print("Topology file parsed successfully.")
                print(f"Server ID: {self.server_id}")
@@ -221,13 +213,17 @@ class DistanceVectorRouting:
                    break
                buffer += data
                while len(buffer) >= 8:  # Minimum size for header
-                   num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', buffer[:8])
-                   expected_size = 8 + (num_entries * 12)
-                   if len(buffer) < expected_size:
-                       break  # Wait for more data
-                   # Parse message
-                   self.parse_message(buffer[:expected_size])
-                   buffer = buffer[expected_size:]  # Remove processed message
+                   try:
+                       num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', buffer[:8])
+                       expected_size = 8 + (num_entries * 12)
+                       if len(buffer) < expected_size:
+                           break  # Wait for more data
+                       # Parse message
+                       self.process_incoming_update(buffer[:expected_size], client_address)
+                       buffer = buffer[expected_size:]  # Remove processed message
+                   except Exception as e:
+                       print(f"Error processing buffer: {e}")
+                       buffer = b""  # Reset buffer on failure
        except Exception as e:
            print(f"Error handling client {client_address}: {e}")
        finally:
@@ -431,21 +427,17 @@ class DistanceVectorRouting:
            new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
-           # Debug: Display the current and new costs
            print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
            print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
 
            if new_cost < current_cost:
                self.routing_table[dest_id] = (sender_id, new_cost)
                updated = True
-
-               # Debug: Log the update
-               print(f"    Updating route to {dest_id}: Next Hop -> {sender_id}, Cost -> {new_cost}")
+               print(f"    Updated: Next Hop -> {sender_id}, Cost -> {new_cost}")
 
        if updated:
            print(f"Routing table updated at Server {self.server_id}: {self.routing_table}")
            self.send_update(len(self.routing_table))
-
 
    def handle_display(self):
        print("Routing Table:")
@@ -457,7 +449,6 @@ class DistanceVectorRouting:
                print(f"{dest_id}: {next_hop_str} {cost_str}")
        print("display SUCCESS")
 
-
    def monitor_neighbors(self, interval):
        time.sleep(interval * 3)  # Grace period: 3 intervals
        while not self.stop_event.is_set():
@@ -466,18 +457,18 @@ class DistanceVectorRouting:
                all_neighbors_unreachable = True
                for neighbor_id in self.missed_updates.keys():
                    self.missed_updates[neighbor_id] += 1
-                   if self.missed_updates[neighbor_id] > 5:  # Missed 3 intervals
+                   print(
+                       f"DEBUG: Neighbor {neighbor_id} missed updates: {self.missed_updates[neighbor_id]}")  # Log for debugging
+                   if self.missed_updates[neighbor_id] > 5:  # Increase threshold
                        self.link_costs[(self.server_id, neighbor_id)] = float('inf')
                        self.routing_table[neighbor_id] = (None, float('inf'))
                        print(f"Link to server {neighbor_id} set to infinity due to missed updates.")
                    else:
                        all_neighbors_unreachable = False  # At least one neighbor is reachable
 
-
                if all_neighbors_unreachable:
                    print("All neighbors are unreachable. Shutting down server...")
                    self.shutdown()
-
 
    def handle_packets(self):
        pass
