@@ -138,7 +138,6 @@ class DistanceVectorRouting:
        try:
            num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', message[:8])
            sender_ip = socket.inet_ntoa(sender_ip)
-
            print(
                f"DEBUG: Parsed Header: Number of Entries={num_entries}, Sender Port={sender_port}, Sender IP={sender_ip}")
 
@@ -148,13 +147,17 @@ class DistanceVectorRouting:
                try:
                    server_ip, server_port, server_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
                    server_ip = socket.inet_ntoa(server_ip)
-                   if cost < 0 or cost == float('inf') or not (1 <= server_id <= len(self.server_details)):
-                       raise ValueError(f"Invalid entry: Server ID={server_id}, Cost={cost}")
-                   routing_table[server_id] = {'server_ip': server_ip, 'server_port': server_port, 'cost': cost}
+
+                   # Validate server ID and cost
+                   if server_id not in self.server_details or cost < 0 or cost == float('inf'):
+                       print(f"Skipping invalid entry: Server ID={server_id}, Cost={cost}")
+                   else:
+                       routing_table[server_id] = {'server_ip': server_ip, 'server_port': server_port, 'cost': cost}
+
                    offset += 12
                except (struct.error, ValueError) as e:
                    print(f"Skipping invalid routing table entry: {e}")
-                   offset += 12  # Skip this entry
+                   offset += 12  # Skip invalid entry
 
            print(f"DEBUG: Parsed Routing Table: {routing_table}")
            return num_entries, sender_port, sender_ip, routing_table
@@ -166,13 +169,12 @@ class DistanceVectorRouting:
        try:
            num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
 
-           # Ensure sender_id is valid
+           # Validate sender ID
            if sender_id not in self.neighbors:
                print(f"Invalid sender ID {sender_id} in update. Ignoring.")
                return
 
            self.apply_bellman_ford(update_table, sender_id)
-
            with self.routing_table_lock:
                self.missed_updates[sender_id] = 0  # Reset missed updates counter
 
@@ -345,10 +347,10 @@ class DistanceVectorRouting:
            except Exception as e:
                print(f"Error sending update to server {neighbor_id}: {e}")
 
-   def periodic_update(self, *args):  # Accept additional arguments to prevent errors
+   def periodic_update(self):
        while not self.stop_event.is_set():
            try:
-               with self.routing_table_lock:  # Ensure thread-safe access
+               with self.routing_table_lock:
                    num_entries = len(self.routing_table)
                    self.send_update(num_entries)
                time.sleep(self.update_interval)
@@ -395,8 +397,8 @@ class DistanceVectorRouting:
        updated = False
        print(f"DEBUG: Applying Bellman-Ford from sender {sender_id}")
        for dest_id, server_details in received_routing_table.items():
-           if dest_id == self.server_id:
-               continue
+           if dest_id == self.server_id or dest_id not in self.server_details:
+               continue  # Skip self or invalid IDs
 
            new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
