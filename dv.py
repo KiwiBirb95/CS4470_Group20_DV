@@ -79,10 +79,10 @@ class DVRouter:
 
             # Initialize routing table with infinity costs
             for server_id in self.servers:
-                self.routing_table[server_id] = (None, float('inf'))
-
-            # Set cost to self as 0
-            self.routing_table[self.server_id] = (self.server_id, 0)
+                if server_id == self.server_id:
+                    self.routing_table[server_id] = (self.server_id, 0)
+                else:
+                    self.routing_table[server_id] = (None, float('inf'))
 
             # Read neighbor link costs
             current_line += self.num_servers
@@ -99,11 +99,11 @@ class DVRouter:
                 # If we're either source or destination, this is our neighbor
                 if src == self.server_id:
                     self.neighbors[dst] = (*self.servers[dst], cost)
-                    self.routing_table[dst] = (dst, cost)
+                    self.routing_table[dst] = (dst, cost)  # Set direct link cost
                     neighbors_found += 1
                 elif dst == self.server_id:
                     self.neighbors[src] = (*self.servers[src], cost)
-                    self.routing_table[src] = (src, cost)
+                    self.routing_table[src] = (src, cost)  # Set direct link cost
                     neighbors_found += 1
 
                 current_line += 1
@@ -159,7 +159,7 @@ class DVRouter:
 
         return header + b''.join(updates)
 
-    def process_update(self, data: bytes, addr: Tuple[str, int]):
+    def process_update(self, data: bytes, addr: Tuple[str, int]) -> bool:
         """Process received distance vector update."""
         try:
             self.packets_received += 1
@@ -189,6 +189,11 @@ class DVRouter:
 
             self.last_update[sender_id] = time.time()
 
+            # Get cost to sender (if they're our neighbor)
+            cost_to_sender = float('inf')
+            if sender_id in self.neighbors:
+                cost_to_sender = self.neighbors[sender_id][2]  # Get cost from neighbors dict
+
             # Process updates
             changed = False
             offset = 8  # Start after header
@@ -197,8 +202,8 @@ class DVRouter:
 
             for update_num in range(num_updates):
                 # Unpack update entry
-                ip = '.'.join(map(str, struct.unpack('!4B', data[offset:offset + 4])))
-                port = struct.unpack('!H', data[offset + 4:offset + 6])[0]
+                dest_ip = '.'.join(map(str, struct.unpack('!4B', data[offset:offset + 4])))
+                dest_port = struct.unpack('!H', data[offset + 4:offset + 6])[0]
                 server_id = struct.unpack('!H', data[offset + 8:offset + 10])[0]
                 cost = struct.unpack('!H', data[offset + 10:offset + 12])[0]
 
@@ -209,17 +214,18 @@ class DVRouter:
                 print(f"  Destination: Server {server_id}")
                 print(f"  Advertised cost from Server {sender_id} to {server_id}: {cost}")
 
-                # Apply Bellman-Ford equation
-                if server_id != self.server_id:  # Skip updates about ourselves
+                # Skip updates about ourselves
+                if server_id != self.server_id:
                     current_cost = self.routing_table[server_id][1]
-                    current_next_hop = self.routing_table[server_id][0]
-                    path_cost = float('inf') if cost == float('inf') else cost + self.routing_table[sender_id][1]
+
+                    # Calculate new path cost through sender
+                    path_cost = float('inf') if cost == float('inf') or cost_to_sender == float(
+                        'inf') else cost + cost_to_sender
 
                     print(f"  Bellman-Ford calculation:")
                     print(f"    Current cost to Server {server_id}: {current_cost}")
-                    print(f"    Current next hop: Server {current_next_hop}")
-                    print(f"    Cost to Server {sender_id}: {self.routing_table[sender_id][1]}")
-                    print(f"    Their cost to Server {server_id}: {cost}")
+                    print(f"    Cost to sender (Server {sender_id}): {cost_to_sender}")
+                    print(f"    Sender's cost to destination: {cost}")
                     print(f"    Total new path cost: {path_cost}")
 
                     if path_cost < current_cost:
