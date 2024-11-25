@@ -7,6 +7,17 @@ from typing import Dict, List, Tuple
 import struct
 import sys
 
+def get_public_ip():
+    """Get public-facing IP by connecting to Google's DNS."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        sock.close()
+        return ip
+    except Exception as e:
+        print(f"Error getting IP address: {e}")
+        sys.exit(1)
 
 class DVRouter:
     def __init__(self, topology_file: str, update_interval: int):
@@ -87,28 +98,34 @@ class DVRouter:
             sys.exit(1)
 
     def find_my_port(self) -> int:
-        """Helper method to find our port number from command line arguments"""
+        """Helper method to find our port number from topology file by matching local IP"""
         try:
-            arg_index = sys.argv.index('-p') if '-p' in sys.argv else -1
-            if arg_index != -1 and arg_index + 1 < len(sys.argv):
-                return int(sys.argv[arg_index + 1])
-            else:
-                # If no port specified, try to determine from hostname/IP
-                hostname = socket.gethostname()
-                local_ip = socket.gethostbyname(hostname)
-                # Search topology file for matching IP
-                with open(self.topology_file, 'r') as f:
-                    lines = f.readlines()
-                    for line in lines[2:]:  # Skip first two lines
-                        if line.strip():
-                            _, ip, port = line.strip().split()
-                            if ip == local_ip:
-                                return int(port)
-                print("Error: Could not determine server port")
-                sys.exit(1)
+            # Get our IP address
+            our_ip = get_public_ip()
+            print(f"Our IP address: {our_ip}")
+
+            # Find matching entry in topology file
+            with open(self.topology_file, 'r') as f:
+                lines = f.readlines()
+                # Skip first two lines (num_servers and num_neighbors)
+                for line in lines[2:]:
+                    if not line.strip():
+                        continue
+                    parts = line.strip().split()
+                    if len(parts) == 3:  # server entries have 3 parts: id, ip, port
+                        _, ip, port = parts
+                        if ip == our_ip:
+                            print(f"Found matching IP {ip} with port {port}")
+                            return int(port)
+
+            print("ERROR: Could not find a matching IP address in topology file.")
+            print("Our IP:", our_ip)
+            print("Please update the topology file with this IP.")
+            sys.exit(1)
+
         except Exception as e:
             print(f"Error finding server port: {e}")
-            sys.exit(1)
+            raise
 
     def create_update_message(self) -> bytes:
         """Create a distance vector update message."""
