@@ -134,49 +134,33 @@ class DistanceVectorRouting:
                except Exception as e:
                    print(f"Error connecting to neighbor {neighbor_id}: {e}")
 
-
    def parse_message(self, message):
        try:
            # Unpack the header
            num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', message[:8])
            sender_ip = socket.inet_ntoa(sender_ip)
 
-
-           # Print the header
-           print(f"Number of update fields: {num_entries}")
-           print(f"Server port: {sender_port}")
-           print(f"Server IP: {sender_ip}")
-
-
-           # Unpack the routing table entries
+           # Initialize routing table for the update
+           parsed_table = {}
            offset = 8
-           routing_table = {}
+
            for _ in range(num_entries):
-               server_ip, server_port, server_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
-               server_ip = socket.inet_ntoa(server_ip)
-               routing_table[server_id] = {
-                   'server_ip' : server_ip,
-                   'server_port' : server_port,
-                   'cost' : cost
-               } # nested dict
+               entry_ip, entry_port, entry_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
+               entry_ip = socket.inet_ntoa(entry_ip)
                offset += 12
-               if sender_ip == server_ip:
-                   print(f"RECEIVED AN UPDATE FROM SERVER: {server_id}")
 
+               # Validate the server ID
+               if entry_id not in self.server_details:
+                   print(f"Invalid server ID in update: {entry_id}")
+                   continue
 
-           #print(f"Number of update fields: {num_entries}")
-           #print(f"Server port: {sender_port}")
-           #print(f"Server IP: {sender_ip}")
-           # Print each entry
-           #for entry in routing_table:
-              #print(f"Routing Table Entry: {entry}")
+               # Add to parsed table
+               parsed_table[entry_id] = {'server_ip': entry_ip, 'server_port': entry_port, 'cost': cost}
 
-
-           return num_entries, sender_port, sender_ip, routing_table
+           return num_entries, sender_port, sender_ip, parsed_table
        except Exception as e:
            print(f"Error parsing message: {e}")
            raise
-
 
    def process_incoming_update(self, message, sender_id):
        try:
@@ -420,20 +404,19 @@ class DistanceVectorRouting:
 
    def apply_bellman_ford(self, received_routing_table, sender_id):
        updated = False
-       for dest_id, server_details in received_routing_table.items():
-           if dest_id == self.server_id:
+       for dest_id, details in received_routing_table.items():
+           # Ignore invalid destinations
+           if dest_id not in self.server_details:
+               print(f"Ignoring update for invalid server ID: {dest_id}")
                continue
 
-           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
+           # Calculate new cost
+           new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + details['cost']
            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
-
-           print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
-           print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
 
            if new_cost < current_cost:
                self.routing_table[dest_id] = (sender_id, new_cost)
                updated = True
-               print(f"    Updated: Next Hop -> {sender_id}, Cost -> {new_cost}")
 
        if updated:
            print(f"Routing table updated at Server {self.server_id}: {self.routing_table}")
