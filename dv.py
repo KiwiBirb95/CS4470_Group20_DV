@@ -2,7 +2,7 @@ import socket
 import json
 import threading
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Union
 import struct
 import sys
 import os
@@ -23,6 +23,7 @@ def get_public_ip():
 
 class DVRouter:
     def __init__(self, topology_file: str, update_interval: int):
+        """Initialize the Distance Vector Router."""
         self.topology_file = topology_file
         self.update_interval = update_interval
         self.server_id = None
@@ -30,13 +31,53 @@ class DVRouter:
         self.port = None
         self.num_servers = 0
         self.num_neighbors = 0
-        self.neighbors = {}  # {server_id: (ip, port, cost)}
-        self.routing_table = {}  # {dest_id: (next_hop_id, cost)}
+        self._neighbors = {}  # {server_id: (ip, port, cost)}
+        self._routing_table = {}  # {dest_id: (next_hop_id, cost)}
         self.servers = {}  # {server_id: (ip, port)}
         self.packets_received = 0
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.running = True
         self.last_update = {}  # {neighbor_id: last_update_time}
+
+    @property
+    def neighbors(self):
+        """Safe access to neighbors dictionary."""
+        return self._neighbors
+
+    @property
+    def routing_table(self):
+        """Safe access to routing table."""
+        return self._routing_table
+
+    def update_route(self, dest_id: int, next_hop: Union[int, None], cost: float) -> None:
+        """
+        Safely update a route in the routing table.
+        Args:
+            dest_id: Destination server ID
+            next_hop: Next hop server ID (None for no route)
+            cost: Cost to destination (float('inf') for unreachable)
+        """
+        print(f"DEBUG: Updating route to {dest_id} via {next_hop} with cost {cost}")
+        self._routing_table[dest_id] = (next_hop, cost)
+
+    def add_neighbor(self, neighbor_id: int, ip: str, port: int, cost: float) -> None:
+        """
+        Safely add or update a neighbor.
+        Also updates the routing table entry for this neighbor.
+        """
+        print(f"DEBUG: Adding/updating neighbor {neighbor_id} with cost {cost}")
+        self._neighbors[neighbor_id] = (ip, port, cost)
+        # Update routing table for direct neighbor
+        self.update_route(neighbor_id, neighbor_id, cost)
+
+    def get_route(self, dest_id: int) -> Tuple[Union[int, None], float]:
+        """
+        Safely get a route from the routing table.
+        Returns: Tuple of (next_hop, cost)
+        """
+        if dest_id in self._routing_table:
+            return self._routing_table[dest_id]
+        return None, float('inf')
 
     def read_topology(self):
         """Read and parse the topology file according to PDF specifications."""
@@ -45,15 +86,16 @@ class DVRouter:
                 lines = [line.strip() for line in f.readlines() if line.strip()]
 
             # First line: num_servers
-            self.num_servers = int(lines[0])
+            self.num_servers = int(lines[0].split()[0])
 
             # Second line: num_neighbors
-            self.num_neighbors = int(lines[1])
+            self.num_neighbors = int(lines[1].split()[0])
 
-            # Find our port first
+            # Find our IP
             our_ip = get_public_ip()
+            print(f"Our IP address: {our_ip}")
 
-            # Read server information
+            # First pass: Read server information
             current_line = 2
             for i in range(self.num_servers):
                 server_id, ip, port = lines[current_line + i].strip().split()
@@ -79,38 +121,47 @@ class DVRouter:
 
             print(f"Successfully initialized as Server {self.server_id} ({self.ip}:{self.port})")
 
-            # Initialize routing table
+            # Initialize routing table with infinity costs and self route
+            print("\nInitializing routing table...")
             for server_id in self.servers:
                 if server_id == self.server_id:
-                    self.routing_table[server_id] = (self.server_id, 0)
+                    self.update_route(server_id, self.server_id, 0)
+                    print(f"  Set self route: {server_id} via {self.server_id} cost 0")
                 else:
-                    self.routing_table[server_id] = (None, float('inf'))
+                    self.update_route(server_id, None, float('inf'))
+                    print(f"  Set initial route: {server_id} via None cost inf")
 
-            # Read neighbor link costs
+            # Second pass: Read and set neighbor costs
             current_line += self.num_servers
             neighbors_found = 0
 
-            # Read all link costs and find our neighbors
-            while current_line < len(lines):
-                line = lines[current_line].strip()
+            print("\nProcessing neighbor information...")
+            for i in range(current_line, len(lines)):
+                line = lines[i].strip()
                 if not line:
-                    break
+                    continue
 
                 src, dst, cost = map(int, line.split())
 
                 # If we're either source or destination, this is our neighbor
                 if src == self.server_id:
-                    self.neighbors[dst] = (*self.servers[dst], cost)
-                    self.routing_table[dst] = (dst, cost)  # Set direct link cost
+                    ip, port = self.servers[dst]
+                    self.add_neighbor(dst, ip, port, cost)
                     neighbors_found += 1
+                    print(f"  Found neighbor (as src): {dst} with cost {cost}")
                 elif dst == self.server_id:
-                    self.neighbors[src] = (*self.servers[src], cost)
-                    self.routing_table[src] = (src, cost)  # Set direct link cost
+                    ip, port = self.servers[src]
+                    self.add_neighbor(src, ip, port, cost)
                     neighbors_found += 1
+                    print(f"  Found neighbor (as dst): {src} with cost {cost}")
 
-                current_line += 1
+            print("\nFinal initial routing table:")
+            for dest_id, (next_hop, cost) in sorted(self.routing_table.items()):
+                cost_str = 'inf' if cost == float('inf') else str(cost)
+                next_hop_str = str(next_hop) if next_hop is not None else 'inf'
+                print(f"  To {dest_id}: via {next_hop_str}, cost {cost_str}")
 
-            print(f"Found {neighbors_found} neighbors: {list(self.neighbors.keys())}")
+            print(f"\nFound {neighbors_found} neighbors: {list(self.neighbors.keys())}")
 
             if neighbors_found != self.num_neighbors:
                 print(f"Warning: Expected {self.num_neighbors} neighbors but found {neighbors_found}")
@@ -178,10 +229,13 @@ class DVRouter:
                 cost_str = 'inf' if cost == float('inf') else str(cost)
                 print(f"  To {dest_id}: via {next_hop}, cost {cost_str}")
 
+            # Update last_update time but don't modify neighbor cost
             self.last_update[sender_id] = time.time()
 
-            # Get cost to sender directly from routing table
-            cost_to_sender = self.routing_table[sender_id][1]
+            # Get cost to sender from neighbors dict
+            cost_to_sender = float('inf')
+            if sender_id in self.neighbors:
+                cost_to_sender = self.neighbors[sender_id][2]
 
             # Process updates
             changed = False
@@ -219,7 +273,7 @@ class DVRouter:
                     print(f"    Total new path cost: {path_cost}")
 
                     if path_cost < current_cost:
-                        self.routing_table[server_id] = (sender_id, path_cost)
+                        self.update_route(server_id, sender_id, path_cost)
                         changed = True
                         print(
                             f"  >>> UPDATED ROUTE: To Server {server_id} via Server {sender_id}, new cost {path_cost}")
@@ -259,14 +313,20 @@ class DVRouter:
     def check_timeouts(self):
         """Check for neighbors that haven't sent updates."""
         while self.running:
-            current_time = time.time()
-            for neighbor_id in list(self.neighbors.keys()):
-                last_update = self.last_update.get(neighbor_id, 0)
-                if current_time - last_update > self.update_interval * 3:
-                    # Mark link as infinity but keep neighbor
-                    self.neighbors[neighbor_id] = (*self.neighbors[neighbor_id][:2], float('inf'))
-                    self.routing_table[neighbor_id] = (neighbor_id, float('inf'))
-            time.sleep(self.update_interval)
+            try:
+                current_time = time.time()
+                for neighbor_id in list(self.neighbors.keys()):
+                    last_update = self.last_update.get(neighbor_id, current_time)  # Initialize with current time
+                    if current_time - last_update > self.update_interval * 3:
+                        print(f"DEBUG: Timeout detected for neighbor {neighbor_id}")
+                        # Keep the original cost when marking as timed out
+                        orig_cost = self.neighbors[neighbor_id][2]
+                        self._neighbors[neighbor_id] = (*self.neighbors[neighbor_id][:2], float('inf'))
+                        self.update_route(neighbor_id, neighbor_id, float('inf'))
+                time.sleep(self.update_interval)
+            except Exception as e:
+                if self.running:
+                    print(f"Error in timeout checker: {e}")
 
     def receive_updates(self):
         """Listen for and process incoming updates."""
@@ -333,13 +393,26 @@ class DVRouter:
         self.packets_received = 0
 
     def handle_display(self):
-        """Handle display command."""
-        print("display SUCCESS")
-        for dest_id in sorted(self.routing_table.keys()):
-            next_hop, cost = self.routing_table[dest_id]
-            next_hop_str = str(next_hop) if next_hop is not None else 'inf'
-            cost_str = 'inf' if cost == float('inf') else str(cost)
-            print(f"{dest_id} {next_hop_str} {cost_str}")
+        """Handle display command. Shows current routing table entries sorted by destination ID."""
+        try:
+            print("display SUCCESS")
+            # Debug print routing table and neighbors
+            print("\nDEBUG - Routing table contents:")
+            for dest_id, (next_hop, cost) in self.routing_table.items():
+                print(f"  Internal: dest={dest_id}, next_hop={next_hop}, cost={cost}")
+
+            print("\nDEBUG - Neighbors dictionary:")
+            for neighbor_id, (ip, port, cost) in self.neighbors.items():
+                print(f"  Neighbor: id={neighbor_id}, ip={ip}, port={port}, cost={cost}")
+
+            # Display the actual formatted output
+            for dest_id in sorted(self.routing_table.keys()):
+                next_hop, cost = self.routing_table[dest_id]
+                next_hop_str = str(next_hop) if next_hop is not None else 'inf'
+                cost_str = str(cost) if cost != float('inf') else 'inf'
+                print(f"{dest_id} {next_hop_str} {cost_str}")
+        except Exception as e:
+            print(f"Display error: {e}")
 
     def handle_disable(self, command):
         """Handle disable command."""
