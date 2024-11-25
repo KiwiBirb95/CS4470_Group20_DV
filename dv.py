@@ -159,7 +159,7 @@ class DVRouter:
 
         return header + b''.join(updates)
 
-    def process_update(self, data: bytes, addr: Tuple[str, int]) -> bool:
+    def process_update(self, data: bytes, addr: Tuple[str, int]):
         """Process received distance vector update."""
         try:
             self.packets_received += 1
@@ -177,48 +177,75 @@ class DVRouter:
                     break
 
             if sender_id is None:
-                print(f"Received update from unknown server {sender_ip}:{sender_port}")
+                print(f"DEBUG: Received update from unknown server {sender_ip}:{sender_port}")
                 return False
 
             print(f"RECEIVED A MESSAGE FROM SERVER {sender_id}")
+            print(f"\nDEBUG: Processing update from Server {sender_id}")
+            print(f"DEBUG: Current routing table before updates:")
+            for dest_id, (next_hop, cost) in sorted(self.routing_table.items()):
+                cost_str = 'inf' if cost == float('inf') else str(cost)
+                print(f"  To {dest_id}: via {next_hop}, cost {cost_str}")
+
             self.last_update[sender_id] = time.time()
 
             # Process updates
             changed = False
             offset = 8  # Start after header
 
-            for _ in range(num_updates):
+            print(f"\nDEBUG: Received {num_updates} updates from Server {sender_id}")
+
+            for update_num in range(num_updates):
                 # Unpack update entry
-                dest_ip = '.'.join(map(str, struct.unpack('!4B', data[offset:offset + 4])))
-                dest_port = struct.unpack('!H', data[offset + 4:offset + 6])[0]
+                ip = '.'.join(map(str, struct.unpack('!4B', data[offset:offset + 4])))
+                port = struct.unpack('!H', data[offset + 4:offset + 6])[0]
                 server_id = struct.unpack('!H', data[offset + 8:offset + 10])[0]
                 cost = struct.unpack('!H', data[offset + 10:offset + 12])[0]
 
-                if cost == 0xFFFF:
+                if cost == 0xFFFF:  # Convert back from wire format
                     cost = float('inf')
+
+                print(f"\nDEBUG: Processing update #{update_num + 1}:")
+                print(f"  Destination: Server {server_id}")
+                print(f"  Advertised cost from Server {sender_id} to {server_id}: {cost}")
 
                 # Apply Bellman-Ford equation
                 if server_id != self.server_id:  # Skip updates about ourselves
-                    # Get cost to the neighbor who sent us this update
-                    neighbor_cost = self.routing_table[sender_id][1]
-                    if neighbor_cost == float('inf'):
-                        continue  # Skip updates from unreachable neighbors
-
-                    # Calculate new potential cost
-                    new_cost = neighbor_cost + cost if cost != float('inf') else float('inf')
-
-                    # Update if new path is better
                     current_cost = self.routing_table[server_id][1]
-                    if new_cost < current_cost:
-                        self.routing_table[server_id] = (sender_id, new_cost)
+                    current_next_hop = self.routing_table[server_id][0]
+                    path_cost = float('inf') if cost == float('inf') else cost + self.routing_table[sender_id][1]
+
+                    print(f"  Bellman-Ford calculation:")
+                    print(f"    Current cost to Server {server_id}: {current_cost}")
+                    print(f"    Current next hop: Server {current_next_hop}")
+                    print(f"    Cost to Server {sender_id}: {self.routing_table[sender_id][1]}")
+                    print(f"    Their cost to Server {server_id}: {cost}")
+                    print(f"    Total new path cost: {path_cost}")
+
+                    if path_cost < current_cost:
+                        self.routing_table[server_id] = (sender_id, path_cost)
                         changed = True
+                        print(
+                            f"  >>> UPDATED ROUTE: To Server {server_id} via Server {sender_id}, new cost {path_cost}")
+                    else:
+                        print("  >>> NO UPDATE: New path is not better than current path")
 
                 offset += 12
+
+            if changed:
+                print("\nDEBUG: Final routing table after updates:")
+                for dest_id, (next_hop, cost) in sorted(self.routing_table.items()):
+                    cost_str = 'inf' if cost == float('inf') else str(cost)
+                    print(f"  To {dest_id}: via {next_hop}, cost {cost_str}")
+            else:
+                print("\nDEBUG: No changes made to routing table")
 
             return changed
 
         except Exception as e:
             print(f"Error processing update: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def send_updates(self):
