@@ -466,7 +466,7 @@ class DistanceVectorRouting:
                all_neighbors_unreachable = True
                for neighbor_id in self.missed_updates.keys():
                    self.missed_updates[neighbor_id] += 1
-                   if self.missed_updates[neighbor_id] > 3:  # Missed 3 intervals
+                   if self.missed_updates[neighbor_id] > 5:  # Missed 3 intervals
                        self.link_costs[(self.server_id, neighbor_id)] = float('inf')
                        self.routing_table[neighbor_id] = (None, float('inf'))
                        print(f"Link to server {neighbor_id} set to infinity due to missed updates.")
