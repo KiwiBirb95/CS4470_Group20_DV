@@ -48,6 +48,9 @@ class DVRouter:
             # Second line: num_neighbors
             self.num_neighbors = int(lines[1])
 
+            # Find our port first
+            our_ip = get_public_ip()
+
             # Read server information
             current_line = 2
             for i in range(self.num_servers):
@@ -56,14 +59,14 @@ class DVRouter:
                 port = int(port)
                 self.servers[server_id] = (ip, port)
 
-                # Set up our server info when we find our server ID
-                # We'll determine our server ID by matching our port with topology file
-                if not self.server_id and port == self.find_my_port():
+                # Set up our server info when we find matching IP
+                if ip == our_ip:
                     self.server_id = server_id
                     self.ip = ip
                     self.port = port
                     try:
                         self.sock.bind((ip, port))
+                        print(f"Successfully bound to {ip}:{port}")
                     except socket.error as e:
                         print(f"Error binding to {ip}:{port}: {e}")
                         sys.exit(1)
@@ -71,6 +74,8 @@ class DVRouter:
             if not self.server_id:
                 print("Error: Could not find my server ID in topology file")
                 sys.exit(1)
+
+            print(f"Successfully initialized as Server {self.server_id} ({self.ip}:{self.port})")
 
             # Initialize routing table with infinity costs
             for server_id in self.servers:
@@ -82,50 +87,39 @@ class DVRouter:
             # Read neighbor link costs
             current_line += self.num_servers
             neighbors_found = 0
-            while current_line < len(lines) and neighbors_found < self.num_neighbors:
-                src, dst, cost = map(int, lines[current_line].split())
+
+            # Read all link costs and find our neighbors
+            while current_line < len(lines):
+                line = lines[current_line].strip()
+                if not line:
+                    break
+
+                src, dst, cost = map(int, line.split())
+
+                # If we're either source or destination, this is our neighbor
                 if src == self.server_id:
                     self.neighbors[dst] = (*self.servers[dst], cost)
                     self.routing_table[dst] = (dst, cost)
                     neighbors_found += 1
+                elif dst == self.server_id:
+                    self.neighbors[src] = (*self.servers[src], cost)
+                    self.routing_table[src] = (src, cost)
+                    neighbors_found += 1
+
                 current_line += 1
+
+            print(f"Found {neighbors_found} neighbors: {list(self.neighbors.keys())}")
 
             if neighbors_found != self.num_neighbors:
                 print(f"Warning: Expected {self.num_neighbors} neighbors but found {neighbors_found}")
 
         except Exception as e:
             print(f"Error reading topology file: {e}")
-            sys.exit(1)
+            raise
 
     def find_my_port(self) -> int:
-        """Helper method to find our port number from topology file by matching local IP"""
-        try:
-            # Get our IP address
-            our_ip = get_public_ip()
-            print(f"Our IP address: {our_ip}")
-
-            # Find matching entry in topology file
-            with open(self.topology_file, 'r') as f:
-                lines = f.readlines()
-                # Skip first two lines (num_servers and num_neighbors)
-                for line in lines[2:]:
-                    if not line.strip():
-                        continue
-                    parts = line.strip().split()
-                    if len(parts) == 3:  # server entries have 3 parts: id, ip, port
-                        _, ip, port = parts
-                        if ip == our_ip:
-                            print(f"Found matching IP {ip} with port {port}")
-                            return int(port)
-
-            print("ERROR: Could not find a matching IP address in topology file.")
-            print("Our IP:", our_ip)
-            print("Please update the topology file with this IP.")
-            sys.exit(1)
-
-        except Exception as e:
-            print(f"Error finding server port: {e}")
-            raise
+        """No longer needed as we handle IP matching in read_topology"""
+        pass
 
     def create_update_message(self) -> bytes:
         """Create a distance vector update message."""
