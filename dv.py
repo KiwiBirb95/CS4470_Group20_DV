@@ -278,8 +278,19 @@ class DistanceVectorRouting:
             if self.server_id in (server_id1, server_id2):
                 neighbor_id = server_id2 if self.server_id == server_id1 else server_id1
                 with self.routing_table_lock:
-                    self.link_costs[(self.server_id, neighbor_id)] = link_cost
-                    self.routing_table[neighbor_id] = (neighbor_id if link_cost != float('inf') else None, link_cost)
+                    # Update both directions in link_costs
+                    self.link_costs[(server_id1, server_id2)] = link_cost
+                    self.link_costs[(server_id2, server_id1)] = link_cost
+
+                    # Update the neighbor cost
+                    self.neighbors[neighbor_id] = link_cost
+
+                    # Update routing table
+                    if link_cost == float('inf'):
+                        self.routing_table[neighbor_id] = (None, float('inf'))
+                    else:
+                        self.routing_table[neighbor_id] = (neighbor_id, link_cost)
+
                 print(f"update {server_id1} {server_id2} {link_cost} SUCCESS")
                 self.send_update(len(self.routing_table))
             else:
@@ -387,27 +398,34 @@ class DistanceVectorRouting:
 
     def apply_bellman_ford(self, received_routing_table, sender_id):
         updated = False
-        for dest_id, server_details in received_routing_table.items():
-            if dest_id == self.server_id:
-                continue
+        with self.routing_table_lock:  # Make sure we lock the routing table while updating
+            for dest_id, server_details in received_routing_table.items():
+                if dest_id == self.server_id:
+                    continue
 
-            new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
-            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
+                # Get the link cost to the sender
+                link_cost = self.link_costs.get((self.server_id, sender_id),
+                                                self.neighbors.get(sender_id, float('inf')))
 
-            # Debug: Display the current and new costs
-            print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
-            print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
+                # Calculate new cost through sender
+                new_cost = link_cost + server_details['cost']
+                current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
-            if new_cost < current_cost:
-                self.routing_table[dest_id] = (sender_id, new_cost)
-                updated = True
+                # Debug: Display the current and new costs
+                print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
+                print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
 
-                # Debug: Log the update
-                print(f"    Updating route to {dest_id}: Next Hop -> {sender_id}, Cost -> {new_cost}")
+                if new_cost < current_cost:
+                    self.routing_table[dest_id] = (sender_id, new_cost)
+                    # Important: Also update the link cost in both directions
+                    self.link_costs[(self.server_id, dest_id)] = new_cost
+                    self.link_costs[(dest_id, self.server_id)] = new_cost
+                    updated = True
+                    print(f"    Updating route to {dest_id}: Next Hop -> {sender_id}, Cost -> {new_cost}")
 
-        if updated:
-            print(f"Routing table updated at Server {self.server_id}: {self.routing_table}")
-            self.send_update(len(self.routing_table))
+            if updated:
+                print(f"Routing table updated at Server {self.server_id}: {self.routing_table}")
+                self.send_update(len(self.routing_table))
 
     def handle_display(self):
         print("Routing Table:")
