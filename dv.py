@@ -418,10 +418,13 @@ class DistanceVectorRouting:
                 # Format cost to match specifications: either "inf" or the actual number
                 if cost == float('inf'):
                     cost_str = "inf"
-                elif cost.is_integer():
-                    cost_str = str(int(cost))  # Remove .0 for whole numbers
                 else:
-                    cost_str = f"{cost}"
+                    # Convert to float first to handle both int and float cases
+                    cost_float = float(cost)
+                    if cost_float.is_integer():
+                        cost_str = str(int(cost_float))  # Remove .0 for whole numbers
+                    else:
+                        cost_str = f"{cost_float}"
 
                 # Format next hop to be "-" if None or the actual number
                 next_hop_str = "-" if next_hop is None else str(next_hop)
