@@ -192,8 +192,8 @@ class DistanceVectorRouting:
     def handle_client(self, client_socket, client_address):
         try:
             while not self.stop_event.is_set():
-                # Receive raw binary data
-                message = client_socket.recv(1024)
+                # Increase buffer size from 1024 to 4096 bytes
+                message = client_socket.recv(4096)  # Changed from 1024
                 if not message:
                     break
 
@@ -354,7 +354,7 @@ class DistanceVectorRouting:
     def handle_incoming_messages(self):
         while not self.stop_event.is_set():
             try:
-                message, addr = self.server_socket.recvfrom(1024)  # Receive raw message
+                message, addr = self.server_socket.recvfrom(4096)  # Receive raw message
                 num_entries, sender_port, sender_ip, routing_table = self.parse_message(message)  # Parse message
                 sender_id = None
 
