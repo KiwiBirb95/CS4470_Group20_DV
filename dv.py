@@ -192,8 +192,8 @@ class DistanceVectorRouting:
     def handle_client(self, client_socket, client_address):
         try:
             while not self.stop_event.is_set():
-                # Receive raw binary data
-                message = client_socket.recv(1024)
+                # Increase buffer size from 1024 to 4096 bytes
+                message = client_socket.recv(4096)  # Changed from 1024
                 if not message:
                     break
 
@@ -354,7 +354,7 @@ class DistanceVectorRouting:
     def handle_incoming_messages(self):
         while not self.stop_event.is_set():
             try:
-                message, addr = self.server_socket.recvfrom(1024)  # Receive raw message
+                message, addr = self.server_socket.recvfrom(4096)  # Receive raw message
                 num_entries, sender_port, sender_ip, routing_table = self.parse_message(message)  # Parse message
                 sender_id = None
 
@@ -412,10 +412,23 @@ class DistanceVectorRouting:
     def handle_display(self):
         print("Routing Table:")
         with self.routing_table_lock:
+            # Sort by destination ID for consistent display
             for dest_id in sorted(self.routing_table.keys()):
                 next_hop, cost = self.routing_table[dest_id]
-                cost_str = "inf" if cost == float('inf') else str(cost)
+                # Format cost to match specifications: either "inf" or the actual number
+                if cost == float('inf'):
+                    cost_str = "inf"
+                else:
+                    # Convert to float first to handle both int and float cases
+                    cost_float = float(cost)
+                    if cost_float.is_integer():
+                        cost_str = str(int(cost_float))  # Remove .0 for whole numbers
+                    else:
+                        cost_str = f"{cost_float}"
+
+                # Format next hop to be "-" if None or the actual number
                 next_hop_str = "-" if next_hop is None else str(next_hop)
+
                 print(f"{dest_id}: {next_hop_str} {cost_str}")
         print("display SUCCESS")
 
@@ -444,14 +457,22 @@ class DistanceVectorRouting:
         self.packets = 0
 
     def handle_disable(self, server_id):
-        for dest_id, (next_hop, cost) in self.routing_table.items():
-            if dest_id == next_hop and server_id == dest_id:
-                try:
-                    client_socket = self.connections[server_id]
-                    client_socket.close()
-                    print(f"disable {server_id} SUCCESS")
-                except Exception as e:
-                    print(f"Error closing connection: {e}")
+        try:
+            if server_id in self.connections:
+                # Close the connection
+                self.connections[server_id].close()
+                # Remove the connection from the connections dictionary
+                del self.connections[server_id]
+                # Update routing table
+                self.routing_table[server_id] = (None, float('inf'))
+                # Remove from neighbors
+                if server_id in self.neighbors:
+                    del self.neighbors[server_id]
+                print(f"disable {server_id} SUCCESS")
+            else:
+                print(f"disable {server_id} ERROR: No connection to server {server_id}")
+        except Exception as e:
+            print(f"Error closing connection: {e}")
 
 
 if __name__ == "__main__":
