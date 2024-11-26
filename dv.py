@@ -444,14 +444,22 @@ class DistanceVectorRouting:
         self.packets = 0
 
     def handle_disable(self, server_id):
-        for dest_id, (next_hop, cost) in self.routing_table.items():
-            if dest_id == next_hop and server_id == dest_id:
-                try:
-                    client_socket = self.connections[server_id]
-                    client_socket.close()
-                    print(f"disable {server_id} SUCCESS")
-                except Exception as e:
-                    print(f"Error closing connection: {e}")
+        try:
+            if server_id in self.connections:
+                # Close the connection
+                self.connections[server_id].close()
+                # Remove the connection from the connections dictionary
+                del self.connections[server_id]
+                # Update routing table
+                self.routing_table[server_id] = (None, float('inf'))
+                # Remove from neighbors
+                if server_id in self.neighbors:
+                    del self.neighbors[server_id]
+                print(f"disable {server_id} SUCCESS")
+            else:
+                print(f"disable {server_id} ERROR: No connection to server {server_id}")
+        except Exception as e:
+            print(f"Error closing connection: {e}")
 
 
 if __name__ == "__main__":
