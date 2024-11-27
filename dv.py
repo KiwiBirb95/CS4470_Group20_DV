@@ -229,46 +229,26 @@ class DistanceVectorRouting:
             elif cmd == "display":
                 self.handle_display()
             elif cmd == "disable" and len(parts) == 2:
-                server_id = int(parts[1])
-                self.handle_disable(server_id)
+                self.handle_disable(parts[1])  # Call handle_disable with the server_id
             elif cmd == "crash":
                 self.shutdown()
             else:
                 print(
-                    f"{command} ERROR: Unknown command. Available commands: update, step, packets, display, disable, "
-                    f"crash.")
+                    f"{command} ERROR: Unknown command. Available commands: update, step, packets, display, disable, crash.")
         except Exception as e:
             print(f"{command} Error handling command: {e}")
 
-    def start_server(self):
-        self.setup_server_socket()
-
-        threading.Thread(target=self.accept_connections, daemon=True).start()
-        threading.Thread(target=self.connect_to_neighbors, daemon=True).start()
-        threading.Thread(target=self.periodic_update, args=(self.update_interval,), daemon=True).start()
-        threading.Thread(target=self.monitor_neighbors, args=(self.update_interval,), daemon=True).start()
-
-        # Test message parsing (debugging)
-        # print("Parsing topology and testing message format...")
-        # num_entries = len(self.routing_table)
-
-        # Debug
-        # message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
-        # for dest_id, (next_hop, cost) in self.routing_table.items():
-        # if cost != float('inf'):  # Skip unreachable destinations
-        # server_ip, server_port = self.server_details[dest_id]
-        # message += struct.pack('<4s H H f', socket.inet_aton(server_ip), server_port, dest_id, cost)
-
-        # parsed_data = self.parse_message(message)
-        # print(f"Parsed message: {parsed_data}")
-
-        # Command input loop runs in the main thread to prevent immediate exit
-        self.command_input_loop()
-
     def command_input_loop(self):
+        """Handle user commands in the main loop"""
         while not self.stop_event.is_set():
-            command = input("Enter command: ")
-            self.process_command(command)
+            try:
+                command = input("Enter command: ").strip()
+                if command:  # Only process non-empty commands
+                    self.process_command(command)
+            except EOFError:
+                break
+            except Exception as e:
+                print(f"Error processing command: {e}")
 
     def update(self, parts):
         try:
@@ -451,29 +431,45 @@ class DistanceVectorRouting:
         self.packets = 0
 
     def handle_disable(self, server_id):
+        """
+        Disable the link to a given server by "closing" the connection.
+        Only works if the given server is a neighbor.
+        """
         try:
-            server_id = int(server_id)  # Ensure server_id is an integer
-            with self.routing_table_lock:
-                if server_id in self.neighbors:
-                    # Set link cost to infinity for this specific neighbor
-                    self.link_costs[(self.server_id, server_id)] = float('inf')
-                    self.routing_table[server_id] = (None, float('inf'))
+            server_id = int(server_id)
+            if server_id in self.neighbors:
+                # Set link cost to infinity for this specific neighbor
+                self.link_costs[(self.server_id, server_id)] = float('inf')
+                self.routing_table[server_id] = (None, float('inf'))
 
-                    # Close only this specific connection
-                    if server_id in self.connections:
-                        try:
-                            self.connections[server_id].close()
-                            self.connections.pop(server_id, None)
-                        except Exception as e:
-                            print(f"Error closing connection with server {server_id}: {e}")
+                # Close only this specific connection
+                if server_id in self.connections:
+                    try:
+                        self.connections[server_id].close()
+                        self.connections.pop(server_id, None)
+                    except Exception as e:
+                        print(f"Error closing connection with server {server_id}: {e}")
 
-                    # Send updates to remaining neighbors about the topology change
-                    self.send_update(len(self.routing_table))
-                    print("disable SUCCESS")
-                else:
-                    print(f"disable ERROR: Server {server_id} is not a direct neighbor.")
+                print("disable SUCCESS")
+                # Send updates to remaining neighbors about the topology change
+                self.send_update(len(self.routing_table))
+            else:
+                print(f"disable ERROR: Server {server_id} is not a direct neighbor.")
         except ValueError:
             print(f"disable ERROR: Invalid server ID format")
+
+    def start_server(self):
+        """Start the routing server and initialize all threads"""
+        self.setup_server_socket()
+
+        # Start daemon threads for different server operations
+        threading.Thread(target=self.accept_connections, daemon=True).start()
+        threading.Thread(target=self.connect_to_neighbors, daemon=True).start()
+        threading.Thread(target=self.periodic_update, args=(self.update_interval,), daemon=True).start()
+        threading.Thread(target=self.monitor_neighbors, args=(self.update_interval,), daemon=True).start()
+
+        # Command input loop runs in the main thread to prevent immediate exit
+        self.command_input_loop()
 
 
 if __name__ == "__main__":
