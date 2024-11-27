@@ -444,30 +444,23 @@ class DistanceVectorRouting:
         print("packets SUCCESS")  # Print success message indicating the command was handled correctly
 
     def handle_disable(self):
-        with self.routing_table_lock:  # Acquire a lock to ensure no other thread is modifying the routing table and neighbors
-            if self.server_id in self.neighbors:  # Check if the specified server ID is a direct neighbor
-                self.link_costs[(self.server_id, self.server_id)] = float(
-                    'inf')  # Set the link cost to infinity indicating the server is unreachable
-                self.routing_table[self.server_id] = (None, float(
-                    'inf'))  # Update the routing table for this neighbor: set next hop to None and cost to infinity
-                self.missed_updates.pop(self.server_id,
-                                        None)  # Remove the server from the missed updates dictionary to stop monitoring it
+        with self.routing_table_lock:
+            if self.server_id in self.neighbors:
+                self.link_costs[(self.server_id, self.server_id)] = float('inf')
+                self.routing_table[self.server_id] = (None, float('inf'))
+                self.missed_updates.pop(self.server_id, None)
 
-                if self.server_id in self.connections:  # Check if there is an active connection to the server
+                if self.server_id in self.connections:
                     try:
-                        self.connections[
-                            self.server_id].close()  # Attempt to close the socket connection with the neighbor
+                        self.connections[self.server_id].close()
                     except Exception as e:
-                        print(
-                            f"Error closing connection with server {self.server_id}: {e}")  # Print an error message if closing the connection fails
+                        print(f"Error closing connection with server {self.server_id}: {e}")
 
-                    self.connections.pop(self.server_id, None)  # Remove the neighbor from the connections dictionary
+                    self.connections.pop(self.server_id, None)
 
-                print(
-                    f"Server {self.server_id} disabled successfully.")  # Print a success message indicating the server was disabled successfully
+                print(f"Server {self.server_id} disabled successfully.")
             else:
-                print(
-                    f"disable {self.server_id} ERROR: Server {self.server_id} is not a direct neighbor.")  # If the specified server ID is not a direct neighbor, print an error message
+                print(f"disable {self.server_id} ERROR: Server {self.server_id} is not a direct neighbor.")
 
 
 if __name__ == "__main__":
