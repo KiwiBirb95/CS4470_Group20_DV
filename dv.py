@@ -456,24 +456,23 @@ class DistanceVectorRouting:
         print(self.packets)
         self.packets = 0
 
-    def handle_disable(self):
+    def handle_disable(self, server_id):
         with self.routing_table_lock:
-            if self.server_id in self.neighbors:
-                self.link_costs[(self.server_id, self.server_id)] = float('inf')
-                self.routing_table[self.server_id] = (None, float('inf'))
-                self.missed_updates.pop(self.server_id, None)
+            if server_id in self.neighbors:
+                self.link_costs[(self.server_id, server_id)] = float('inf')
+                self.routing_table[server_id] = (None, float('inf'))
+                self.missed_updates.pop(server_id, None)
 
-                if self.server_id in self.connections:
+                if server_id in self.connections:
                     try:
-                        self.connections[self.server_id].close()
+                        self.connections[server_id].close()
+                        self.connections.pop(server_id, None)
                     except Exception as e:
-                        print(f"Error closing connection with server {self.server_id}: {e}")
+                        print(f"Error closing connection with server {server_id}: {e}")
 
-                    self.connections.pop(self.server_id, None)
-
-                print(f"Server {self.server_id} disabled successfully.")
+                print("disable SUCCESS")
             else:
-                print(f"disable {self.server_id} ERROR: Server {self.server_id} is not a direct neighbor.")
+                print(f"disable ERROR: Server {server_id} is not a direct neighbor.")
 
 
 if __name__ == "__main__":
