@@ -32,6 +32,7 @@ class DistanceVectorRouting:
         self.neighbors = {}
         self.server_socket = None
         self.missed_updates = {neighbor_id: 0 for neighbor_id in self.neighbors.keys()}
+        self.packets = 0
 
     def parse_topology_file(self):
         try:
@@ -157,7 +158,7 @@ class DistanceVectorRouting:
             # Print each entry
             # for entry in routing_table:
             # print(f"Routing Table Entry: {entry}")
-
+            self.packets += 1
             return num_entries, sender_port, sender_ip, routing_table
         except Exception as e:
             print(f"Error parsing message: {e}")
@@ -191,8 +192,8 @@ class DistanceVectorRouting:
     def handle_client(self, client_socket, client_address):
         try:
             while not self.stop_event.is_set():
-                # Receive raw binary data
-                message = client_socket.recv(4096)
+                # Increase buffer size from 1024 to 4096 bytes
+                message = client_socket.recv(4096)  # Changed from 1024
                 if not message:
                     break
 
@@ -411,10 +412,23 @@ class DistanceVectorRouting:
     def handle_display(self):
         print("Routing Table:")
         with self.routing_table_lock:
+            # Sort by destination ID for consistent display
             for dest_id in sorted(self.routing_table.keys()):
                 next_hop, cost = self.routing_table[dest_id]
-                cost_str = "inf" if cost == float('inf') else str(cost)
+                # Format cost to match specifications: either "inf" or the actual number
+                if cost == float('inf'):
+                    cost_str = "inf"
+                else:
+                    # Convert to float first to handle both int and float cases
+                    cost_float = float(cost)
+                    if cost_float.is_integer():
+                        cost_str = str(int(cost_float))  # Remove .0 for whole numbers
+                    else:
+                        cost_str = f"{cost_float}"
+
+                # Format next hop to be "-" if None or the actual number
                 next_hop_str = "-" if next_hop is None else str(next_hop)
+
                 print(f"{dest_id}: {next_hop_str} {cost_str}")
         print("display SUCCESS")
 
@@ -438,10 +452,9 @@ class DistanceVectorRouting:
                     self.shutdown()
 
     def handle_packets(self):
-        # Print the total number of routing updates received
-        # Summing the values of 'missed_updates' gives total count of all updates received so far
-        print(f"Total number of routing updates received: {sum(self.missed_updates.values())}")
-        print("packets SUCCESS")  # Print success message indicating the command was handled correctly
+        print("packets SUCCESS")
+        print(self.packets)
+        self.packets = 0
 
     def handle_disable(self):
         with self.routing_table_lock:
