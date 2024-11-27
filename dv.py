@@ -170,15 +170,15 @@ class DistanceVectorRouting:
             num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
 
             # Debug: Display the received message in a clearer format
-            print(f"\nReceived Update from Server {sender_id} ({sender_ip}:{sender_port})")
-            print("Parsed Routing Table:")
-            print("-" * 50)
-            print(f"{'Dest':^6} | {'IP':^15} | {'Port':^6} | {'Cost':^6}")
-            print("-" * 50)
-            for id, server_details in update_table.items():
-                print(
-                    f"{id:^6} | {server_details['server_ip']:^15} | {server_details['server_port']:^6} | {server_details['cost']:^6.1f}")
-            print("-" * 50)
+            # print(f"\nReceived Update from Server {sender_id} ({sender_ip}:{sender_port})")
+            # print("Parsed Routing Table:")
+            # print("-" * 50)
+            # print(f"{'Dest':^6} | {'IP':^15} | {'Port':^6} | {'Cost':^6}")
+            # print("-" * 50)
+            # for id, server_details in update_table.items():
+            #     print(
+            #         f"{id:^6} | {server_details['server_ip']:^15} | {server_details['server_port']:^6} | {server_details['cost']:^6.1f}")
+            # print("-" * 50)
 
             # Apply Bellman-Ford logic to update the routing table
             sender_id = 0
@@ -379,6 +379,11 @@ class DistanceVectorRouting:
 
     def apply_bellman_ford(self, received_routing_table, sender_id):
         updated = False
+        print(f"\nApplying Bellman-Ford Updates from Server {sender_id}")
+        print("-" * 50)
+        print(f"{'Dest':^6} | {'Via':^6} | {'Old Cost':^10} | {'New Cost':^10} | {'Update':^8}")
+        print("-" * 50)
+
         for dest_id, server_details in received_routing_table.items():
             if dest_id == self.server_id:
                 continue
@@ -386,19 +391,27 @@ class DistanceVectorRouting:
             new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
             current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
-            # Debug: Display the current and new costs
-            print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
-            print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
+            # Format costs for display
+            current_cost_str = "inf" if current_cost == float('inf') else f"{current_cost:.1f}"
+            new_cost_str = "inf" if new_cost == float('inf') else f"{new_cost:.1f}"
+            update_str = "YES" if new_cost < current_cost else "NO"
+
+            print(f"{dest_id:^6} | {sender_id:^6} | {current_cost_str:^10} | {new_cost_str:^10} | {update_str:^8}")
 
             if new_cost < current_cost:
                 self.routing_table[dest_id] = (sender_id, new_cost)
                 updated = True
 
-                # Debug: Log the update
-                print(f"    Updating route to {dest_id}: Next Hop -> {sender_id}, Cost -> {new_cost}")
-
+        print("-" * 50)
         if updated:
-            print(f"Routing table updated at Server {self.server_id}: {self.routing_table}")
+            print(f"Routing table updated at Server {self.server_id}:")
+            print(f"{'Dest':^6} | {'Next Hop':^10} | {'Cost':^8}")
+            print("-" * 50)
+            for dest_id, (next_hop, cost) in sorted(self.routing_table.items()):
+                cost_str = "inf" if cost == float('inf') else f"{cost:.1f}"
+                next_hop_str = "-" if next_hop is None else str(next_hop)
+                print(f"{dest_id:^6} | {next_hop_str:^10} | {cost_str:^8}")
+            print("-" * 50)
             self.send_update(len(self.routing_table))
 
     def handle_display(self):
