@@ -169,9 +169,16 @@ class DistanceVectorRouting:
             # Parse the incoming message
             num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
 
-            # Debug: Display the received message
-            print(f"DEBUG: Received update from {sender_ip}:{sender_port} (Server {sender_id})")
-            print(f"DEBUG: Parsed Routing Table from Server {sender_id}: {update_table}")
+            # Debug: Display the received message in a clearer format
+            print(f"\nReceived Update from Server {sender_id} ({sender_ip}:{sender_port})")
+            print("Parsed Routing Table:")
+            print("-" * 50)
+            print(f"{'Dest':^6} | {'IP':^15} | {'Port':^6} | {'Cost':^6}")
+            print("-" * 50)
+            for id, server_details in update_table.items():
+                print(
+                    f"{id:^6} | {server_details['server_ip']:^15} | {server_details['server_port']:^6} | {server_details['cost']:^6.1f}")
+            print("-" * 50)
 
             # Apply Bellman-Ford logic to update the routing table
             sender_id = 0
@@ -248,21 +255,6 @@ class DistanceVectorRouting:
         threading.Thread(target=self.periodic_update, args=(self.update_interval,), daemon=True).start()
         threading.Thread(target=self.monitor_neighbors, args=(self.update_interval,), daemon=True).start()
 
-        # Test message parsing (debugging)
-        # print("Parsing topology and testing message format...")
-        # num_entries = len(self.routing_table)
-
-        # Debug
-        # message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
-        # for dest_id, (next_hop, cost) in self.routing_table.items():
-        # if cost != float('inf'):  # Skip unreachable destinations
-        # server_ip, server_port = self.server_details[dest_id]
-        # message += struct.pack('<4s H H f', socket.inet_aton(server_ip), server_port, dest_id, cost)
-
-        # parsed_data = self.parse_message(message)
-        # print(f"Parsed message: {parsed_data}")
-
-        # Command input loop runs in the main thread to prevent immediate exit
         self.command_input_loop()
 
     def command_input_loop(self):
