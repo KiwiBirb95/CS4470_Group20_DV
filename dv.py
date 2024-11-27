@@ -316,30 +316,21 @@ class DistanceVectorRouting:
             # Pack the header: Number of update fields, sender's port, sender's IP
             message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
 
-            # Pack each routing table entry: Server IP, port, ID, cost
+            # Pack each routing table entry
             for dest_id, (next_hop, cost) in self.routing_table.items():
-                if cost != float('inf'):  # Include only reachable destinations
+                if cost != float('inf') or dest_id in self.neighbors:  # Include infinity costs for neighbors
                     server_ip, server_port = self.server_details[dest_id]
                     message += struct.pack('<4s H H f', socket.inet_aton(server_ip), server_port, dest_id, cost)
 
-        # Debug
-        # print(f"Packed message to be sent: {message}")
-        # print("Sending update:")
-        # print(f"Number of entries: {num_entries}")
-        # print(f"Server port: {self.port}")
-        # print(f"Server IP: {self.ip}")
-        # Debug
-
-        # for dest_id, (next_hop, cost) in self.routing_table.items():
-        # print(f"Destination ID: {dest_id}, Next Hop: {next_hop}, Cost: {cost}")
-
-        # Send the packed message to all neighbors
-        for neighbor_id, conn in self.connections.items():
-            try:
-                conn.send(message)
-                print(f"Routing update sent to server {neighbor_id}.")
-            except Exception as e:
-                print(f"Error sending update to server {neighbor_id}: {e}")
+            # Send the packed message to all active neighbors only
+            for neighbor_id, conn in list(self.connections.items()):
+                if neighbor_id in self.neighbors and self.link_costs.get((self.server_id, neighbor_id),
+                                                                         float('inf')) != float('inf'):
+                    try:
+                        conn.send(message)
+                        print(f"Routing update sent to server {neighbor_id}.")
+                    except Exception as e:
+                        print(f"Error sending update to server {neighbor_id}: {e}")
 
     def periodic_update(self, interval):
         while not self.stop_event.is_set():
@@ -391,19 +382,18 @@ class DistanceVectorRouting:
             if dest_id == self.server_id:
                 continue
 
-            new_cost = self.link_costs.get((self.server_id, sender_id), float('inf')) + server_details['cost']
-            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
+            # Skip updates for directly disabled links
+            if dest_id in self.neighbors and self.link_costs.get((self.server_id, dest_id), float('inf')) == float(
+                    'inf'):
+                continue
 
-            # Debug: Display the current and new costs
-            print(f"DEBUG: From Server {self.server_id} to {dest_id} via {sender_id}:")
-            print(f"    Current Cost: {current_cost}, New Cost: {new_cost}")
+            link_cost = self.link_costs.get((self.server_id, sender_id), float('inf'))
+            new_cost = link_cost + server_details['cost']
+            current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
             if new_cost < current_cost:
                 self.routing_table[dest_id] = (sender_id, new_cost)
                 updated = True
-
-                # Debug: Log the update
-                print(f"    Updating route to {dest_id}: Next Hop -> {sender_id}, Cost -> {new_cost}")
 
         if updated:
             print(f"Routing table updated at Server {self.server_id}: {self.routing_table}")
@@ -437,19 +427,20 @@ class DistanceVectorRouting:
         while not self.stop_event.is_set():
             time.sleep(interval)
             with self.routing_table_lock:
-                all_neighbors_unreachable = True
-                for neighbor_id in self.missed_updates.keys():
-                    self.missed_updates[neighbor_id] += 1
-                    if self.missed_updates[neighbor_id] > 3:  # Missed 3 intervals
-                        self.link_costs[(self.server_id, neighbor_id)] = float('inf')
-                        self.routing_table[neighbor_id] = (None, float('inf'))
-                        print(f"Link to server {neighbor_id} set to infinity due to missed updates.")
-                    else:
-                        all_neighbors_unreachable = False  # At least one neighbor is reachable
-
-                if all_neighbors_unreachable:
+                active_neighbors = [n for n in self.neighbors.keys()
+                                    if self.link_costs.get((self.server_id, n), float('inf')) != float('inf')]
+                if not active_neighbors:
                     print("All neighbors are unreachable. Shutting down server...")
                     self.shutdown()
+                    break
+
+                for neighbor_id in list(self.missed_updates.keys()):
+                    if neighbor_id in active_neighbors:
+                        self.missed_updates[neighbor_id] += 1
+                        if self.missed_updates[neighbor_id] > 3:  # Missed 3 intervals
+                            self.link_costs[(self.server_id, neighbor_id)] = float('inf')
+                            self.routing_table[neighbor_id] = (None, float('inf'))
+                            print(f"Link to server {neighbor_id} set to infinity due to missed updates.")
 
     def handle_packets(self):
         print("packets SUCCESS")
@@ -459,10 +450,11 @@ class DistanceVectorRouting:
     def handle_disable(self, server_id):
         with self.routing_table_lock:
             if server_id in self.neighbors:
+                # Set link cost to infinity only for this specific neighbor
                 self.link_costs[(self.server_id, server_id)] = float('inf')
                 self.routing_table[server_id] = (None, float('inf'))
-                self.missed_updates.pop(server_id, None)
 
+                # Close only this specific connection
                 if server_id in self.connections:
                     try:
                         self.connections[server_id].close()
@@ -470,7 +462,17 @@ class DistanceVectorRouting:
                     except Exception as e:
                         print(f"Error closing connection with server {server_id}: {e}")
 
+                # Remove from missed updates tracking
+                self.missed_updates.pop(server_id, None)
+
+                # Keep this neighbor in routing table but with infinity cost
+                self.routing_table[server_id] = (None, float('inf'))
+
                 print("disable SUCCESS")
+
+                # Send updates to remaining neighbors about the topology change
+                num_entries = len(self.routing_table)
+                self.send_update(num_entries)
             else:
                 print(f"disable ERROR: Server {server_id} is not a direct neighbor.")
 
