@@ -216,7 +216,7 @@ class DistanceVectorRouting:
        try:
            while not self.stop_event.is_set():
                # Receive raw binary data
-               message = client_socket.recv(1024)
+               message = client_socket.recv(4096)
                if not message:
                    break
 
@@ -395,7 +395,7 @@ class DistanceVectorRouting:
    def handle_incoming_messages(self):
        while not self.stop_event.is_set():
            try:
-               message, addr = self.server_socket.recvfrom(1024)  # Receive raw message
+               message, addr = self.server_socket.recvfrom(4096)  # Receive raw message
                num_entries, sender_port, sender_ip, routing_table = self.parse_message(message)  # Parse message
                sender_id = None
 
@@ -492,22 +492,22 @@ class DistanceVectorRouting:
 
    def handle_disable(self):
         with self.routing_table_lock: # Acquire a lock to ensure no other thread is modifying the routing table and neighbors
-            if server_id in self.neighbors: # Check if the specified server ID is a direct neighbor
-                self.link_costs[(self.server_id, server_id)] = float('inf') # Set the link cost to infinity indicating the server is unreachable
-                self.routing_table[server_id] = (None, float('inf')) # Update the routing table for this neighbor: set next hop to None and cost to infinity
-                self.missed_updates.pop(server_id, None) #  Remove the server from the missed updates dictionary to stop monitoring it
+            if self.server_id in self.neighbors: # Check if the specified server ID is a direct neighbor
+                self.link_costs[(self.server_id, self.server_id)] = float('inf') # Set the link cost to infinity indicating the server is unreachable
+                self.routing_table[self.server_id] = (None, float('inf')) # Update the routing table for this neighbor: set next hop to None and cost to infinity
+                self.missed_updates.pop(self.server_id, None) #  Remove the server from the missed updates dictionary to stop monitoring it
                
-                if server_id in self.connections: # Check if there is an active connection to the server
+                if self.server_id in self.connections: # Check if there is an active connection to the server
                     try:
-                       self.connections[server_id].close() # Attempt to close the socket connection with the neighbor
+                       self.connections[self.server_id].close() # Attempt to close the socket connection with the neighbor
                     except Exception as e:
-                       print(f"Error closing connection with server {server_id}: {e}") # Print an error message if closing the connection fails
+                       print(f"Error closing connection with server {self.server_id}: {e}") # Print an error message if closing the connection fails
                     
-                    self.connections.pop(server_id, None) # Remove the neighbor from the connections dictionary
+                    self.connections.pop(self.server_id, None) # Remove the neighbor from the connections dictionary
                 
-                print(f"Server {server_id} disabled successfully.") # Print a success message indicating the server was disabled successfully
+                print(f"Server {self.server_id} disabled successfully.") # Print a success message indicating the server was disabled successfully
             else:
-               print(f"disable {server_id} ERROR: Server {server_id} is not a direct neighbor.") # If the specified server ID is not a direct neighbor, print an error message
+               print(f"disable {self.server_id} ERROR: Server {self.server_id} is not a direct neighbor.") # If the specified server ID is not a direct neighbor, print an error message
 
 
 
