@@ -484,11 +484,30 @@ class DistanceVectorRouting:
 
 
    def handle_packets(self):
-       pass
+       # Print the total number of routing updates received
+       # Summing the values of 'missed_updates' gives total count of all updates received so far
+       print(f"Total number of routing updates received: {sum(self.missed_updates.values())}")
+       print("packets SUCCESS") # Print success message indicating the command was handled correctly
 
 
    def handle_disable(self):
-       pass
+        with self.routing_table_lock: # Acquire a lock to ensure no other thread is modifying the routing table and neighbors
+            if server_id in self.neighbors: # Check if the specified server ID is a direct neighbor
+                self.link_costs[(self.server_id, server_id)] = float('inf') # Set the link cost to infinity indicating the server is unreachable
+                self.routing_table[server_id] = (None, float('inf')) # Update the routing table for this neighbor: set next hop to None and cost to infinity
+                self.missed_updates.pop(server_id, None) #  Remove the server from the missed updates dictionary to stop monitoring it
+               
+                if server_id in self.connections: # Check if there is an active connection to the server
+                    try:
+                       self.connections[server_id].close() # Attempt to close the socket connection with the neighbor
+                    except Exception as e:
+                       print(f"Error closing connection with server {server_id}: {e}") # Print an error message if closing the connection fails
+                    
+                    self.connections.pop(server_id, None) # Remove the neighbor from the connections dictionary
+                
+                print(f"Server {server_id} disabled successfully.") # Print a success message indicating the server was disabled successfully
+            else:
+               print(f"disable {server_id} ERROR: Server {server_id} is not a direct neighbor.") # If the specified server ID is not a direct neighbor, print an error message
 
 
 
