@@ -6,7 +6,7 @@ This implementation provides a distributed distance vector routing protocol usin
 ## 2. Key Data Structures
 
 ### 2.1 Update Message Structure
-Location: dv.py, lines 196-208 (parse_message method)
+Location: dv.py (parse_message method)
 ```python
 # Message format:
 # Header (8 bytes):
@@ -21,7 +21,7 @@ Location: dv.py, lines 196-208 (parse_message method)
 ```
 
 ### 2.2 Routing Table Structure
-Location: dv.py, line 26 (DistanceVectorRouting class initialization)
+Location: dv.py (DistanceVectorRouting class initialization)
 ```python
 self.routing_table = {}  # Format: {destination_id: (next_hop, cost)}
 ```
@@ -33,8 +33,8 @@ self.routing_table = {}  # Format: {destination_id: (next_hop, cost)}
 ## 3. Core Components
 
 ### 3.1 Network Setup
-- The server initializes by parsing a topology file (lines 31-107)
-- Creates TCP connections with neighbors (lines 145-156)
+- The server initializes by parsing a topology file
+- Creates TCP connections with neighbors
 - Uses threading for concurrent handling of:
   - Connection acceptance
   - Periodic updates
@@ -42,7 +42,7 @@ self.routing_table = {}  # Format: {destination_id: (next_hop, cost)}
   - Command processing
 
 ### 3.2 Distance Vector Algorithm Implementation
-Location: dv.py, lines 392-434 (apply_bellman_ford method)
+Location: dv.py (apply_bellman_ford method)
 
 Key features:
 1. Thread-safe updates using routing_table_lock
@@ -52,7 +52,7 @@ Key features:
 5. Triggers updates to neighbors when routes change
 
 ### 3.3 Neighbor Monitoring
-Location: dv.py, lines 518-568 (monitor_neighbors method)
+Location: dv.py (monitor_neighbors method)
 
 Features:
 - Uses a three-stage monitoring system:
@@ -66,23 +66,23 @@ Features:
 
 The implementation supports the following commands:
 
-1. update (lines 284-295)
+1. update
    - Updates link costs between servers
    - Triggers routing table updates
 
-2. step (lines 287-289)
+2. step
    - Forces immediate routing update broadcast
 
-3. packets (lines 571-574)
+3. packets
    - Displays and resets packet counter
 
-4. display (lines 476-495)
+4. display
    - Shows current routing table state
 
-5. disable (lines 576-601)
+5. disable
    - Simulates link failure to specified neighbor
 
-6. crash (lines 297-316)
+6. crash
    - Graceful server shutdown
 
 ## 5. Error Handling and Recovery
