@@ -6,6 +6,11 @@ import time
 
 
 def get_local_ip():
+    """
+    Retrieve the local IP address of the machine by creating a temporary connection.
+    :return: String containing the local IP address
+    :raises: SystemExit if unable to determine local IP
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as temp_socket:
             temp_socket.connect(("8.8.8.8", 80))
@@ -18,6 +23,12 @@ def get_local_ip():
 
 class DistanceVectorRouting:
     def __init__(self, topology_file, update_interval):
+        """
+        Initialize the Distance Vector Routing server with configuration settings.
+        :param topology_file: Path to the file containing network topology information
+        :param update_interval: Time interval in seconds between routing updates
+        :return: None
+        """
         self.topology_file = topology_file
         self.update_interval = update_interval
         self.server_id = None
@@ -35,6 +46,17 @@ class DistanceVectorRouting:
         self.packets = 0
 
     def parse_topology_file(self):
+        """
+        Parse the topology configuration file to set up routing information and server details.
+        File format:
+        Line 1: Number of servers (N)
+        Line 2: Number of neighbors
+        Lines 3 to N+2: Server ID, IP, and port for each server
+        Remaining lines: Server1 Server2 Cost triplets
+        :return: None
+        :raises: ValueError if topology file format is invalid
+        :raises: SystemExit if file cannot be read or parsed
+        """
         try:
             with open(self.topology_file, 'r') as file:
                 lines = file.readlines()
@@ -95,6 +117,11 @@ class DistanceVectorRouting:
             sys.exit(1)
 
     def setup_server_socket(self):
+        """
+        Create and configure the server's TCP socket, binding it to the specified IP and port.
+        :return: None
+        :raises: SystemExit if socket cannot be created or bound
+        """
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.bind((self.ip, self.port))
@@ -105,6 +132,11 @@ class DistanceVectorRouting:
             sys.exit(1)
 
     def accept_connections(self):
+        """
+        Continuously accept incoming TCP connections and spawn new threads to handle them.
+        Runs until stop_event is set.
+        :return: None
+        """
         while not self.stop_event.is_set():
             try:
                 client_socket, client_address = self.server_socket.accept()
@@ -116,6 +148,11 @@ class DistanceVectorRouting:
                 print("Error accepting connections.")
 
     def connect_to_neighbors(self):
+        """
+        Establish TCP connections to all neighboring servers defined in the topology.
+        Stores connections in self.connections dictionary.
+        :return: None
+        """
         for neighbor_id, (neighbor_ip, neighbor_port) in self.server_details.items():
             if neighbor_id != self.server_id:  # Avoid connecting to self
                 try:
@@ -127,6 +164,12 @@ class DistanceVectorRouting:
                     print(f"Error connecting to neighbor {neighbor_id}: {e}")
 
     def parse_message(self, message):
+        """
+        Parse a received routing update message from binary format.
+        :param message: Raw binary message received from network
+        :return: Tuple containing (num_entries, sender_port, sender_ip, routing_table)
+        :raises: Exception if message parsing fails
+        """
         try:
             # Unpack the header
             num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', message[:8])
@@ -158,6 +201,12 @@ class DistanceVectorRouting:
             raise
 
     def process_incoming_update(self, message, sender_id):
+        """
+        Process a routing update message received from a neighboring server.
+        :param message: Raw binary message containing routing updates
+        :param sender_id: ID of the server that sent the update
+        :return: None
+        """
         try:
             # Parse the incoming message
             num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
@@ -178,6 +227,12 @@ class DistanceVectorRouting:
             print(f"Error processing incoming update: {e}")
 
     def handle_client(self, client_socket, client_address):
+        """
+        Handle communication with a connected client, processing received messages.
+        :param client_socket: Socket object for the client connection
+        :param client_address: Tuple containing (IP, port) of the connected client
+        :return: None
+        """
         try:
             while not self.stop_event.is_set():
                 message = client_socket.recv(4096)
@@ -199,6 +254,12 @@ class DistanceVectorRouting:
             client_socket.close()
 
     def process_command(self, command):
+        """
+        Process a user-entered command and execute the corresponding action.
+        Supported commands: update, step, packets, display, disable, crash
+        :param command: String containing the command entered by user
+        :return: None
+        """
         parts = command.split()
         if len(parts) == 0:
             print("No command entered.")
@@ -228,6 +289,11 @@ class DistanceVectorRouting:
             print(f"{command} Error handling command: {e}")
 
     def start_server(self):
+        """
+        Start the routing server and initialize all components including threads for
+        connection handling and periodic updates.
+        :return: None
+        """
         self.setup_server_socket()
 
         threading.Thread(target=self.accept_connections, daemon=True).start()
@@ -238,11 +304,20 @@ class DistanceVectorRouting:
         self.command_input_loop()
 
     def command_input_loop(self):
+        """
+        Main loop for processing user input commands until stop_event is set.
+        :return: None
+        """
         while not self.stop_event.is_set():
             command = input("Enter command: ")
             self.process_command(command)
 
     def update(self, parts):
+        """
+        Handle an update command to modify link costs between servers.
+        :param parts: List containing command parts [command, server1, server2, cost]
+        :return: None
+        """
         try:
             server_id1, server_id2, link_cost = int(parts[1]), int(parts[2]), float(parts[3])
 
@@ -260,6 +335,10 @@ class DistanceVectorRouting:
             print("update ERROR: Invalid input. Use: update <server-ID1> <server-ID2> <Link Cost>")
 
     def shutdown(self):
+        """
+        Perform graceful server shutdown by closing all connections and cleaning up resources.
+        :return: None
+        """
         print("Simulating server shutdown...")
         self.stop_event.set()  # Stop all periodic tasks and monitoring
 
@@ -284,6 +363,11 @@ class DistanceVectorRouting:
         sys.exit(0)  # Exit the program
 
     def send_update(self, num_entries):
+        """
+        Send routing updates to all connected neighbors.
+        :param num_entries: Number of routing table entries to send
+        :return: None
+        """
         with self.routing_table_lock:
             # Pack the header: Number of update fields, sender's port, sender's IP
             message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
@@ -303,6 +387,11 @@ class DistanceVectorRouting:
                 print(f"Error sending update to server {neighbor_id}: {e}")
 
     def periodic_update(self, interval):
+        """
+        Periodically send routing updates to neighbors at specified intervals.
+        :param interval: Time in seconds between updates
+        :return: None
+        """
         while not self.stop_event.is_set():
             time.sleep(interval)
             num_entries = len(self.routing_table)
@@ -313,6 +402,10 @@ class DistanceVectorRouting:
                 break
 
     def handle_incoming_messages(self):
+        """
+        Process incoming routing update messages continuously until stop_event is set.
+        :return: None
+        """
         while not self.stop_event.is_set():
             try:
                 message, addr = self.server_socket.recvfrom(4096)  # Receive raw message
@@ -337,6 +430,10 @@ class DistanceVectorRouting:
                 print(f"Error handling incoming message: {e}")
 
     def initialise_routing_table(self):
+        """
+        Initialize the routing table with initial routes and costs for all known destinations.
+        :return: None
+        """
         for server_id in self.server_details.keys():
             if server_id in self.server_id:
                 self.routing_table[server_id] = (server_id, 0)
@@ -347,6 +444,12 @@ class DistanceVectorRouting:
         print("fInitial routing table: {self.routing_table}")
 
     def apply_bellman_ford(self, received_routing_table, sender_id):
+        """
+        Apply the Bellman-Ford algorithm to update routing table with new information.
+        :param received_routing_table: Dictionary containing routing information from neighbor
+        :param sender_id: ID of the server that sent the update
+        :return: None
+        """
         updated = False
         print(f"\nApplying Bellman-Ford Updates from Server {sender_id}")
         print("-" * 42)
@@ -405,6 +508,10 @@ class DistanceVectorRouting:
             self.send_update(len(self.routing_table))
 
     def handle_display(self):
+        """
+        Display the current routing table showing destinations, next hops, and costs.
+        :return: None
+        """
         print("Routing Table:")
         with self.routing_table_lock:
             # Sort by destination ID for consistent display
@@ -428,6 +535,11 @@ class DistanceVectorRouting:
         print("display SUCCESS")
 
     def monitor_neighbors(self, interval):
+        """
+        Monitor neighbor connectivity and handle failures using warning and critical thresholds.
+        :param interval: Time interval in seconds between connectivity checks
+        :return: None
+        """
         grace_period = interval * 3  # Initial grace period
         warning_threshold = 2  # Number of missed updates before warning
         critical_threshold = 4  # Number of missed updates before marking as unreachable
@@ -471,6 +583,11 @@ class DistanceVectorRouting:
                         self.shutdown()
 
     def find_alternate_paths(self, failed_server_id):
+        """
+        Search for alternate paths when a neighbor fails by checking other available routes.
+        :param failed_server_id: ID of the server that has failed
+        :return: None
+        """
         with self.routing_table_lock:
             updated = False
             print("\nSearching for alternate paths:")
@@ -498,11 +615,20 @@ class DistanceVectorRouting:
                 self.send_update(len(self.routing_table))
 
     def handle_packets(self):
+        """
+        Display the number of routing update packets received and reset the counter.
+        :return: None
+        """
         print("packets SUCCESS")
         print(self.packets)
         self.packets = 0
 
     def handle_disable(self, server_id):
+        """
+        Disable connection to a specified neighbor by setting link cost to infinity.
+        :param server_id: ID of the neighbor server to disable
+        :return: None
+        """
         try:
             # Verify the server is a neighbor we can disable
             if server_id not in self.neighbors:
