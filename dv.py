@@ -149,7 +149,7 @@ class DistanceVectorRouting:
     def connect_to_neighbors(self):
         """
         Establish TCP connections to all neighboring servers defined in the topology.
-        Stores connections in self.connections dictionary.
+        Stores connections in self. Connections dictionary.
         :return: None
         """
         for neighbor_id, (neighbor_ip, neighbor_port) in self.server_details.items():
