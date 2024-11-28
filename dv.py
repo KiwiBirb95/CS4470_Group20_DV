@@ -539,7 +539,6 @@ if __name__ == "__main__":
 
     topology_file = sys.argv[2]
     update_interval = int(sys.argv[4])  # Convert interval to an integer
-    # print(f"Parsed arguments: Topology file: {topology_file}, Update interval: {update_interval}")  # Debugging line
 
     # Pass both arguments to the constructor
     server = DistanceVectorRouting(topology_file, update_interval)
