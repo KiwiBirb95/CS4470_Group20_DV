@@ -66,8 +66,8 @@ class DistanceVectorRouting:
                 # First two lines specify the number of servers and neighbors
                 num_servers = int(lines[0].strip())
 
-                # Parse server details
-                self.server_details = {}
+                # Parse server details (ID, IP, port)
+                self.server_details = {}  # Maps server ID -> (IP, port)
                 for i in range(2, 2 + num_servers):
                     server_id, server_ip, server_port = lines[i].strip().split()
                     self.server_details[int(server_id)] = (server_ip, int(server_port))
@@ -84,8 +84,8 @@ class DistanceVectorRouting:
                 if self.server_id is None:
                     raise ValueError(f"Local IP {local_ip} does not match any server in the topology file.")
 
-                # Parse neighbor information
-                self.neighbors = {}
+                # Parse neighbor information (connections and costs)
+                self.neighbors = {}  # Maps neighbor server ID -> cost
                 for i in range(2 + num_servers, len(lines)):
                     server1, server2, cost = map(int, lines[i].strip().split())
                     if server1 == self.server_id:
@@ -93,7 +93,7 @@ class DistanceVectorRouting:
                     elif server2 == self.server_id:
                         self.neighbors[server1] = cost
 
-                # Initialize routing table
+                # Initialize routing table with (next_hop, cost) for each server
                 self.routing_table = {}
                 for server_id in self.server_details.keys():
                     if server_id == self.server_id:
@@ -110,7 +110,6 @@ class DistanceVectorRouting:
                 print(f"Server ID: {self.server_id}")
                 print(f"Neighbors: {self.neighbors}")
                 print(f"Routing Table: {self.routing_table}")
-
 
         except Exception as e:
             print(f"Error reading topology file: {e}")
@@ -171,30 +170,30 @@ class DistanceVectorRouting:
         :raises: Exception if message parsing fails
         """
         try:
-            # Unpack the header
+            # Unpack the header: number of entries, sender's port, and sender's IP
             num_entries, sender_port, sender_ip = struct.unpack('<H H 4s', message[:8])
-            sender_ip = socket.inet_ntoa(sender_ip)
+            sender_ip = socket.inet_ntoa(sender_ip)  # Convert binary IP to human-readable format
 
-            # Print the header
             print(f"Number of update fields: {num_entries}")
             print(f"Server port: {sender_port}")
             print(f"Server IP: {sender_ip}")
 
             # Unpack the routing table entries
-            offset = 8
+            offset = 8  # Start of routing table entries
             routing_table = {}
             for _ in range(num_entries):
+                # Each entry: IP (4 bytes), port (2 bytes), ID (2 bytes), cost (4 bytes)
                 server_ip, server_port, server_id, cost = struct.unpack('<4s H H f', message[offset:offset + 12])
-                server_ip = socket.inet_ntoa(server_ip)
+                server_ip = socket.inet_ntoa(server_ip)  # Convert binary IP to readable format
                 routing_table[server_id] = {
                     'server_ip': server_ip,
                     'server_port': server_port,
                     'cost': cost
-                }  # nested dict
-                offset += 12
+                }
+                offset += 12  # Move to the next entry
                 if sender_ip == server_ip:
                     print(f"RECEIVED AN UPDATE FROM SERVER: {server_id}")
-            self.packets += 1
+            self.packets += 1  # Increment packet count for received updates
             return num_entries, sender_port, sender_ip, routing_table
         except Exception as e:
             print(f"Error parsing message: {e}")
@@ -369,16 +368,16 @@ class DistanceVectorRouting:
         :return: None
         """
         with self.routing_table_lock:
-            # Pack the header: Number of update fields, sender's port, sender's IP
+            # Pack the message header: Number of entries, sender's port, sender's IP
             message = struct.pack('<H H 4s', num_entries, self.port, socket.inet_aton(self.ip))
 
-            # Pack each routing table entry: Server IP, port, ID, cost
+            # Pack each routing table entry (only include reachable destinations)
             for dest_id, (next_hop, cost) in self.routing_table.items():
-                if cost != float('inf'):  # Include only reachable destinations
+                if cost != float('inf'):  # Skip unreachable destinations
                     server_ip, server_port = self.server_details[dest_id]
                     message += struct.pack('<4s H H f', socket.inet_aton(server_ip), server_port, dest_id, cost)
 
-        # Send the packed message to all neighbors
+        # Send the packed message to all connected neighbors
         for neighbor_id, conn in self.connections.items():
             try:
                 conn.send(message)
@@ -458,42 +457,29 @@ class DistanceVectorRouting:
 
         with self.routing_table_lock:
             for dest_id, server_details in received_routing_table.items():
-                if dest_id == self.server_id:
+                if dest_id == self.server_id:  # Skip entries for this server
                     continue
 
-                # Get current route information
+                # Current route information
                 current_next_hop, current_cost = self.routing_table.get(dest_id, (None, float('inf')))
 
-                # Try path through sender
+                # Calculate cost through the sender
                 cost_through_sender = (self.link_costs.get((self.server_id, sender_id), float('inf'))
                                        + server_details['cost'])
 
-                # Check paths through all neighbors
-                best_cost = current_cost
-                best_next_hop = current_next_hop
+                # Determine the best cost (minimization logic)
+                best_cost = min(current_cost, cost_through_sender)
+                best_next_hop = sender_id if cost_through_sender < current_cost else current_next_hop
 
-                # Consider path through sender
-                if cost_through_sender < best_cost:
-                    best_cost = cost_through_sender
-                    best_next_hop = sender_id
-
-                # Check direct path if it exists
-                direct_cost = self.link_costs.get((self.server_id, dest_id), float('inf'))
-                if direct_cost < best_cost:
-                    best_cost = direct_cost
-                    best_next_hop = dest_id
-
-                # Format costs for display
+                # Display cost comparisons for debugging
                 current_cost_str = "inf" if current_cost == float('inf') else f"{current_cost:.1f}"
                 new_cost_str = "inf" if best_cost == float('inf') else f"{best_cost:.1f}"
-
                 print(f"{dest_id:^6} | {sender_id:^6} | {current_cost_str:^10} | {new_cost_str:^10}")
 
-                # Update if we found a better path
+                # Update the routing table if a better path is found
                 if best_cost < current_cost:
                     self.routing_table[dest_id] = (best_next_hop, best_cost)
                     updated = True
-                    print(f"    Found better path to {dest_id} via {best_next_hop} cost {best_cost:.1f}")
 
         print("-" * 42)
         if updated:
@@ -505,7 +491,7 @@ class DistanceVectorRouting:
                 next_hop_str = "-" if next_hop is None else str(next_hop)
                 print(f"{dest_id:^6} | {next_hop_str:^10} | {cost_str:^8}")
             print("-" * 42)
-            self.send_update(len(self.routing_table))
+            self.send_update(len(self.routing_table))  # Notify neighbors of updates
 
     def handle_display(self):
         """
@@ -514,21 +500,18 @@ class DistanceVectorRouting:
         """
         print("Routing Table:")
         with self.routing_table_lock:
-            # Sort by destination ID for consistent display
+            # Sort entries by destination ID for consistent display
             for dest_id in sorted(self.routing_table.keys()):
                 next_hop, cost = self.routing_table[dest_id]
-                # Format cost to match specifications: either "inf" or the actual number
+
+                # Format cost for readability (e.g., "inf" or numeric value)
                 if cost == float('inf'):
                     cost_str = "inf"
                 else:
-                    # Convert to float first to handle both int and float cases
                     cost_float = float(cost)
-                    if cost_float.is_integer():
-                        cost_str = str(int(cost_float))  # Remove .0 for whole numbers
-                    else:
-                        cost_str = f"{cost_float}"
+                    cost_str = str(int(cost_float)) if cost_float.is_integer() else f"{cost_float}"
 
-                # Format next hop to be "-" if None or the actual number
+                # Format next hop (e.g., "-" for None or numeric value)
                 next_hop_str = "-" if next_hop is None else str(next_hop)
 
                 print(f"{dest_id}: {next_hop_str} {cost_str}")
@@ -540,44 +523,46 @@ class DistanceVectorRouting:
         :param interval: Time interval in seconds between connectivity checks
         :return: None
         """
-        grace_period = interval * 3  # Initial grace period
+        grace_period = interval * 3  # Wait period before monitoring neighbors
         warning_threshold = 2  # Number of missed updates before warning
-        critical_threshold = 4  # Number of missed updates before marking as unreachable
+        critical_threshold = 4  # Number of missed updates before marking unreachable
 
+        # Wait for the grace period to avoid false positives during initialization
         time.sleep(grace_period)
 
         while not self.stop_event.is_set():
-            time.sleep(interval)
+            time.sleep(interval)  # Periodically check connectivity
             with self.routing_table_lock:
-                active_neighbors = set(self.neighbors.keys())
-                warned_neighbors = set()
+                active_neighbors = set(self.neighbors.keys())  # Track connected neighbors
+                warned_neighbors = set()  # Track neighbors that triggered warnings
 
                 for neighbor_id in list(self.missed_updates.keys()):
-                    self.missed_updates[neighbor_id] += 1
+                    self.missed_updates[neighbor_id] += 1  # Increment missed updates counter
 
                     # Warning phase
                     if self.missed_updates[neighbor_id] == warning_threshold:
                         print(f"\nWARNING: Server {neighbor_id} may be unreachable")
                         warned_neighbors.add(neighbor_id)
 
-                    # Critical phase
+                    # Critical phase: Assume link failure if updates are consistently missed
                     elif self.missed_updates[neighbor_id] >= critical_threshold:
                         if neighbor_id in active_neighbors:
+                            # Mark the link as failed
                             active_neighbors.remove(neighbor_id)
                             self.link_costs[(self.server_id, neighbor_id)] = float('inf')
                             self.routing_table[neighbor_id] = (None, float('inf'))
                             print(f"Link to server {neighbor_id} set to infinity due to missed updates.")
 
-                            # Try to find alternate paths
+                            # Attempt to find alternate paths for destinations via this neighbor
                             self.find_alternate_paths(neighbor_id)
 
-                # Only shutdown if truly isolated
+                # Check if all neighbors are unreachable and warn about possible isolation
                 if len(active_neighbors) == 0 and len(warned_neighbors) == len(self.neighbors):
                     print("\nCRITICAL: All neighbors are unreachable.")
                     print("Attempting to maintain partial connectivity...")
-                    time.sleep(interval * 2)  # Give extra time for recovery
+                    time.sleep(interval * 2)  # Allow extra time for recovery
 
-                    # Final check before shutdown
+                    # Final check before concluding isolation
                     if all(self.missed_updates[n] >= critical_threshold for n in self.neighbors):
                         print("No recovery possible. Shutting down server...")
                         self.shutdown()
@@ -594,23 +579,28 @@ class DistanceVectorRouting:
             print("-" * 50)
 
             for dest_id, (next_hop, cost) in list(self.routing_table.items()):
-                if next_hop == failed_server_id:
-                    min_cost = float('inf')
-                    best_next_hop = None
+                # Skip if destination is not affected by the failure
+                if next_hop != failed_server_id:
+                    continue
 
-                    # Check all other neighbors
-                    for neighbor_id in self.neighbors:
-                        if neighbor_id != failed_server_id:
-                            path_cost = self.link_costs.get((self.server_id, neighbor_id), float('inf'))
-                            if path_cost < min_cost:
-                                min_cost = path_cost
-                                best_next_hop = neighbor_id
+                min_cost = float('inf')  # Initialize with high cost
+                best_next_hop = None  # Placeholder for the best next hop
 
-                    if best_next_hop is not None:
-                        self.routing_table[dest_id] = (best_next_hop, min_cost)
-                        print(f"Found new path to {dest_id} via {best_next_hop} cost {min_cost}")
-                        updated = True
+                # Check all neighbors for alternate paths
+                for neighbor_id in self.neighbors:
+                    if neighbor_id != failed_server_id:
+                        path_cost = self.link_costs.get((self.server_id, neighbor_id), float('inf'))
+                        if path_cost < min_cost:
+                            min_cost = path_cost
+                            best_next_hop = neighbor_id
 
+                # Update routing table if a new path is found
+                if best_next_hop is not None:
+                    self.routing_table[dest_id] = (best_next_hop, min_cost)
+                    print(f"Found new path to {dest_id} via {best_next_hop} cost {min_cost}")
+                    updated = True
+
+            # Notify neighbors if any updates were made
             if updated:
                 self.send_update(len(self.routing_table))
 
