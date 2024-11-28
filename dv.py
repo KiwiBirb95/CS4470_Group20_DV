@@ -151,13 +151,6 @@ class DistanceVectorRouting:
                 offset += 12
                 if sender_ip == server_ip:
                     print(f"RECEIVED AN UPDATE FROM SERVER: {server_id}")
-
-            # print(f"Number of update fields: {num_entries}")
-            # print(f"Server port: {sender_port}")
-            # print(f"Server IP: {sender_ip}")
-            # Print each entry
-            # for entry in routing_table:
-            # print(f"Routing Table Entry: {entry}")
             self.packets += 1
             return num_entries, sender_port, sender_ip, routing_table
         except Exception as e:
@@ -169,18 +162,6 @@ class DistanceVectorRouting:
             # Parse the incoming message
             num_entries, sender_port, sender_ip, update_table = self.parse_message(message)
 
-            # Debug: Display the received message in a clearer format
-            # print(f"\nReceived Update from Server {sender_id} ({sender_ip}:{sender_port})")
-            # print("Parsed Routing Table:")
-            # print("-" * 50)
-            # print(f"{'Dest':^6} | {'IP':^15} | {'Port':^6} | {'Cost':^6}")
-            # print("-" * 50)
-            # for id, server_details in update_table.items():
-            #     print(
-            #         f"{id:^6} | {server_details['server_ip']:^15} | {server_details['server_port']:^6} | {server_details['cost']:^6.1f}")
-            # print("-" * 50)
-
-            # Apply Bellman-Ford logic to update the routing table
             sender_id = 0
             for id, server_details in update_table.items():
                 if server_details['server_port'] == sender_port and server_details['server_ip'] == sender_ip:
@@ -199,8 +180,7 @@ class DistanceVectorRouting:
     def handle_client(self, client_socket, client_address):
         try:
             while not self.stop_event.is_set():
-                # Increase buffer size from 1024 to 4096 bytes
-                message = client_socket.recv(4096)  # Changed from 1024
+                message = client_socket.recv(4096)
                 if not message:
                     break
 
@@ -313,17 +293,6 @@ class DistanceVectorRouting:
                 if cost != float('inf'):  # Include only reachable destinations
                     server_ip, server_port = self.server_details[dest_id]
                     message += struct.pack('<4s H H f', socket.inet_aton(server_ip), server_port, dest_id, cost)
-
-        # Debug
-        # print(f"Packed message to be sent: {message}")
-        # print("Sending update:")
-        # print(f"Number of entries: {num_entries}")
-        # print(f"Server port: {self.port}")
-        # print(f"Server IP: {self.ip}")
-        # Debug
-
-        # for dest_id, (next_hop, cost) in self.routing_table.items():
-        # print(f"Destination ID: {dest_id}, Next Hop: {next_hop}, Cost: {cost}")
 
         # Send the packed message to all neighbors
         for neighbor_id, conn in self.connections.items():
